@@ -6,8 +6,6 @@
 
 ![首页](docs/screenshot-home.png)
 
-![筛查结果](docs/screenshot-result.png)
-
 ## 功能特点
 
 - **单文件、零安装**：构建产物 `dist/打卡无效记录筛查.html` 约 1 MB，双击用浏览器打开就能用，可放在 U 盘、群文件或内网共享盘里分发。
