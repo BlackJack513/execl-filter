@@ -4,6 +4,8 @@
 >
 > 整个工具被构建成**一个 HTML 文件**，双击即可使用，不需要安装、不需要联网，文件也不会离开你的电脑。
 
+**在线使用**：<https://blackjack513.github.io/execl-filter/>
+
 ![首页](docs/screenshot-home.png)
 
 ## 功能特点
@@ -18,21 +20,25 @@
 
 ## 快速开始
 
-### 方式一：直接使用构建好的页面（推荐）
+### 方式一：在线打开（最省事）
+
+直接访问 <https://blackjack513.github.io/execl-filter/>，上传考勤表即可。页面由 GitHub Pages 托管，但解析与导出仍然全部在你的浏览器里完成。
+
+### 方式二：下载单文件离线使用
 
 1. 下载 [`dist/打卡无效记录筛查.html`](dist/打卡无效记录筛查.html)（在 GitHub 上点开文件后选择 *Download raw file*）；
 2. 双击打开，按页面提示拖入考勤表即可。
 
 > 也可以把 `dist` 目录整个拷到内网共享盘，同事打开同一个文件就能用。
 
-### 方式二：从源码构建
+### 方式三：从源码构建
 
 ```bash
 npm install
 npm run build
 ```
 
-构建完成后生成 `dist/打卡无效记录筛查.html`，模板、样式、ExcelJS 和业务脚本会被内联进这一个文件。
+构建完成后生成 `dist/打卡无效记录筛查.html`，模板、样式、ExcelJS 和业务脚本会被内联进这一个文件。线上版本由 `gh-pages` 分支提供，重新构建后把这一个文件复制成 `gh-pages` 分支根目录的 `index.html` 即可更新。
 
 ## 判定规则
 
