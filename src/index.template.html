@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="上传考勤 Excel，自动筛查签到晚于 9:00 或未签退的记录，并导出标红结果。">
+  <title>打卡无效记录筛查</title>
+  <style>
+/*__STYLE__*/
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="3.5" width="17" height="17" rx="3"></rect>
+            <path d="M3.5 9h17M9 3.5v17"></path>
+            <path d="M12.5 14.2l1.9 1.9 3.6-3.7"></path>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>打卡无效记录筛查</h1>
+          <p>上传考勤表 · 自动定位异常 · 一键导出结果</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="today-pill"><span class="dot"></span><span id="todayText">今天</span></div>
+        <div class="privacy-badge">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="10" width="16" height="11" rx="2.5"></rect>
+            <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+          </svg>
+          <span>本地处理 · 文件不上传</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="card upload-card" id="uploadCard">
+        <div class="card-head">
+          <span class="step-no">1</span>
+          <div>
+            <h2>上传考勤表</h2>
+            <p>支持 .xlsx / .xlsm 格式</p>
+          </div>
+        </div>
+
+        <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="上传 Excel 文件">
+          <input id="fileInput" type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden>
+          <div class="drop-icon" aria-hidden="true">
+            <svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 16V4"></path>
+              <path d="M7 9l5-5 5 5"></path>
+              <path d="M4.5 15.5v2A2.5 2.5 0 0 0 7 20h10a2.5 2.5 0 0 0 2.5-2.5v-2"></path>
+            </svg>
+          </div>
+          <div class="drop-title">拖拽 Excel 到这里</div>
+          <div class="drop-sub">或 <span>点击选择文件</span></div>
+          <div class="drop-note">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="10" width="16" height="11" rx="2.5"></rect>
+              <path d="M8 10V7a4 4 0 0 1 8 0v3"></path>
+            </svg>
+            文件仅在本机浏览器中解析
+          </div>
+        </div>
+
+        <div class="file-card hidden" id="fileCard">
+          <div class="file-icon" aria-hidden="true">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 2.8h7.2L18.5 8v13.2H6z"></path>
+              <path d="M13.2 2.8V8h5.3"></path>
+              <path d="M9 12.2h6M9 15.6h6M9 19h3.6"></path>
+            </svg>
+          </div>
+          <div class="file-main">
+            <div class="file-name" id="fileName"></div>
+            <div class="file-meta" id="fileMeta"></div>
+          </div>
+          <button class="icon-btn" id="changeFileBtn" type="button" title="更换文件" aria-label="更换文件">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 11a8 8 0 1 0-2.3 6.3"></path>
+              <path d="M20 4v7h-7"></path>
+            </svg>
+          </button>
+        </div>
+      </section>
+
+      <section class="card settings-card is-locked" id="settingsCard">
+        <div class="card-head">
+          <span class="step-no">2</span>
+          <div>
+            <h2>设置识别规则</h2>
+            <p>指定表头、数据行与关键列</p>
+          </div>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span>表头所在行</span>
+            <input id="headerRowInput" type="number" min="1" step="1" value="1" inputmode="numeric" disabled>
+          </label>
+          <label class="field">
+            <span>数据起始行</span>
+            <input id="dataStartInput" type="number" min="2" step="1" value="2" inputmode="numeric" disabled>
+          </label>
+        </div>
+
+        <label class="field">
+          <span>工作表</span>
+          <select id="sheetSelect" disabled>
+            <option>上传文件后可用</option>
+          </select>
+        </label>
+
+        <div class="divider"></div>
+
+        <div class="mapping-head">
+          <span>列映射</span>
+          <button class="text-btn" id="remapBtn" type="button" disabled>重新识别</button>
+        </div>
+
+        <label class="field map-field">
+          <span>姓名列</span>
+          <select id="nameCol" disabled>
+            <option value="">— 请选择列 —</option>
+          </select>
+          <small class="sample" id="nameSample">上传文件后自动识别</small>
+        </label>
+
+        <label class="field map-field">
+          <span>签到时间列</span>
+          <select id="inCol" disabled>
+            <option value="">— 请选择列 —</option>
+          </select>
+          <small class="sample" id="inSample">上传文件后自动识别</small>
+        </label>
+
+        <label class="field map-field">
+          <span>签退时间列</span>
+          <select id="outCol" disabled>
+            <option value="">— 请选择列 —</option>
+          </select>
+          <small class="sample" id="outSample">上传文件后自动识别</small>
+        </label>
+
+        <div class="map-hint hidden" id="mapHint"></div>
+
+        <div class="rule-box">
+          <div class="rule-title">判定规则 <span>满足任一即无效</span></div>
+          <div class="rule-item"><span class="rule-dot"></span><span>签到时间晚于 09:00:00</span><b>无效</b></div>
+          <div class="rule-item"><span class="rule-dot"></span><span>签退时间为空白</span><b>无效</b></div>
+          <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
+          <p>只比较时:分:秒，忽略日期；09:00:00 整视为有效。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。</p>
+        </div>
+      </section>
+    </aside>
+
+    <section class="card result-card" id="resultCard" aria-live="polite">
+      <div class="result-head">
+        <div class="card-head">
+          <span class="step-no">3</span>
+          <div>
+            <h2>筛查结果</h2>
+            <p id="resultSub">上传文件后自动生成</p>
+          </div>
+        </div>
+        <div class="segmented" id="filterTabs">
+          <button class="seg-btn is-active" type="button" data-filter="all">全部</button>
+          <button class="seg-btn" type="button" data-filter="invalid">仅无效</button>
+        </div>
+      </div>
+
+      <div class="result-body" id="resultBody">
+        <div class="stats hidden" id="stats">
+          <div class="stat">
+            <div class="stat-label">记录总数</div>
+            <div class="stat-value" id="statTotal">0</div>
+            <div class="stat-foot">已跳过空白行</div>
+          </div>
+          <div class="stat stat-invalid">
+            <div class="stat-label">无效记录</div>
+            <div class="stat-value" id="statInvalid">0</div>
+            <div class="stat-foot" id="statInvalidFoot">待筛查</div>
+          </div>
+          <div class="stat stat-valid">
+            <div class="stat-label">有效记录</div>
+            <div class="stat-value" id="statValid">0</div>
+            <div class="stat-foot" id="statValidFoot">待筛查</div>
+          </div>
+        </div>
+
+        <div class="reason-chips hidden" id="reasonChips"></div>
+
+        <div class="table-shell hidden" id="tableShell">
+          <div class="table-mobile-hint">左右滑动查看完整表格 <span>→</span></div>
+          <div class="table-scroll">
+            <table class="preview-table">
+              <thead>
+                <tr>
+                  <th class="col-no">行号</th>
+                  <th>姓名</th>
+                  <th>签到时间</th>
+                  <th>签退时间</th>
+                  <th class="col-status">判定</th>
+                </tr>
+              </thead>
+              <tbody id="previewBody"></tbody>
+            </table>
+          </div>
+          <div class="table-foot" id="tableFoot"></div>
+        </div>
+
+        <div class="empty-state" id="emptyState"></div>
+      </div>
+
+      <div class="result-footer">
+        <div class="export-info">
+          <div class="export-name" id="exportName">11月10日打卡无效人员.xlsx</div>
+          <div class="export-hint" id="exportHint">上传文件并完成列映射后即可导出</div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-ghost" id="copyBtn" type="button" disabled>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2"></rect>
+              <path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"></path>
+            </svg>
+            复制名单
+          </button>
+          <button class="btn btn-primary" id="exportBtn" type="button" disabled>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 3v12"></path>
+              <path d="M7 10l5 5 5-5"></path>
+              <path d="M4.5 15.5v2A2.5 2.5 0 0 0 7 20h10a2.5 2.5 0 0 0 2.5-2.5v-2"></path>
+            </svg>
+            <span id="exportBtnText">导出 Excel</span>
+          </button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="page-footer">所有计算均在当前浏览器内完成 · 文件不会上传，关闭页面后不保留任何内容</footer>
+
+  <div class="loading hidden" id="loading" role="status" aria-live="polite">
+    <div class="loading-card">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="loading-title">正在解析 Excel…</div>
+      <div class="loading-sub" id="loadingFile"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+/*__EXCELJS__*/
+  </script>
+  <script>
+/*__CORE__*/
+  </script>
+  <script>
+/*__APP__*/
+  </script>
+</body>
+</html>

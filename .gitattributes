@@ -1,0 +1,5 @@
+# 统一换行符，避免 Windows / macOS 提交产生无意义的差异
+* text=auto eol=lf
+
+*.png binary
+*.xlsx binary

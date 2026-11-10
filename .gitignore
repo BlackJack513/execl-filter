@@ -1,0 +1,13 @@
+# 依赖
+node_modules/
+.npm-cache/
+
+# 本地调试与测试产物（不随仓库发布）
+scratch/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

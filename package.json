@@ -1,0 +1,24 @@
+{
+  "name": "excel-filter",
+  "version": "1.0.0",
+  "description": "打卡无效记录筛查：在浏览器本地解析考勤 Excel，自动标记签到晚于 9:00 或未签退的记录，并导出标红结果。",
+  "private": true,
+  "type": "commonjs",
+  "main": "build.js",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "keywords": [
+    "excel",
+    "xlsx",
+    "attendance",
+    "考勤",
+    "打卡",
+    "exceljs"
+  ],
+  "author": "BlackJack513",
+  "license": "MIT",
+  "dependencies": {
+    "exceljs": "^4.4.0"
+  }
+}
