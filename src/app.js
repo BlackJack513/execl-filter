@@ -29,7 +29,8 @@
     mapping: { name: '', in: '', out: '' },
     records: [],
     stats: null,
-    filter: 'all'
+    filter: 'all',
+    mode: 'full'
   };
 
   var ICONS = {
@@ -69,10 +70,12 @@
       'fileInput', 'dropzone', 'fileCard', 'fileName', 'fileMeta', 'changeFileBtn',
       'settingsCard', 'headerRowInput', 'dataStartInput', 'sheetSelect',
       'nameCol', 'inCol', 'outCol', 'nameSample', 'inSample', 'outSample',
-      'remapBtn', 'mapHint', 'resultCard', 'resultSub', 'filterTabs',
-      'stats', 'statTotal', 'statInvalid', 'statValid', 'statInvalidFoot', 'statValidFoot',
+      'remapBtn', 'mapHint', 'resultCard', 'resultSub', 'modeTabs', 'filterTabs',
+      'autoHint', 'autoHintRatio', 'autoHintBtn', 'modeNote',
+      'stats', 'statTotal', 'statInvalid', 'statValid', 'statInvalidLabel', 'statInvalidFoot', 'statValidFoot',
       'reasonChips', 'tableShell', 'previewBody', 'tableFoot', 'emptyState',
       'exportName', 'exportHint', 'copyBtn', 'exportBtn', 'exportBtnText',
+      'ruleBadge', 'ruleOut', 'ruleOutBadge', 'ruleNote',
       'loading', 'loadingFile', 'toast', 'todayText'
     ].forEach(function (id) {
       el[id] = $(id);
@@ -101,6 +104,16 @@
   function toCol(value) {
     var n = parseInt(value, 10);
     return isFinite(n) && n > 0 ? n : '';
+  }
+
+  /** 当前是否为「早上九点后 · 仅看签到」场景 */
+  function isMorning() {
+    return state.mode === C.MODES.MORNING;
+  }
+
+  function exportTitle() {
+    var today = C.todayInfo();
+    return today.monthDay + '打卡' + (isMorning() ? '迟到与未打卡' : '无效') + '人员';
   }
 
   function tick() {
@@ -310,7 +323,7 @@
 
       if (!name && signIn.kind === 'blank' && signOut.kind === 'blank') continue;
 
-      var evaluation = C.evaluateRecord(signIn, signOut);
+      var evaluation = C.evaluateRecord(signIn, signOut, { mode: state.mode });
       records.push({
         row: r,
         name: name,
@@ -391,9 +404,34 @@
     updateFileMeta();
   }
 
+  /** 同步「统计场景」按钮与左侧判定规则说明 */
+  function renderModeControls() {
+    var morning = isMorning();
+    Array.prototype.forEach.call(el.modeTabs.querySelectorAll('.seg-btn'), function (btn) {
+      var active = btn.getAttribute('data-mode') === state.mode;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+
+    el.ruleBadge.textContent = morning ? '只看签到' : '满足任一即无效';
+    el.ruleOut.classList.toggle('is-off', morning);
+    el.ruleOutBadge.textContent = morning ? '不校验' : '无效';
+    el.ruleNote.textContent = morning
+      ? '早上九点后统计：签退时间此时通常都是空的，不参与判定；其余规则不变，09:00:00 整也算迟到。'
+      : '只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。';
+  }
+
+  function setMode(mode) {
+    var next = mode === C.MODES.MORNING ? C.MODES.MORNING : C.MODES.FULL;
+    if (next === state.mode) return;
+    state.mode = next;
+    renderModeControls();
+    if (state.workbook) recalc();
+    else renderInitial();
+  }
+
   function resetResultFooter() {
-    var today = C.todayInfo();
-    el.exportName.textContent = today.header + '.xlsx';
+    el.exportName.textContent = exportTitle() + '.xlsx';
     el.exportBtn.disabled = true;
     el.copyBtn.disabled = true;
     el.exportBtnText.textContent = '导出 Excel';
@@ -422,6 +460,8 @@
     state.records = [];
     state.stats = null;
     el.resultSub.textContent = '上传文件后自动生成';
+    el.autoHint.classList.add('hidden');
+    el.modeNote.classList.add('hidden');
     el.stats.classList.add('hidden');
     el.reasonChips.classList.add('hidden');
     hideTable();
@@ -449,6 +489,8 @@
     state.stats = null;
     showMapHint(message);
     el.resultSub.textContent = '请完成列映射';
+    el.autoHint.classList.add('hidden');
+    el.modeNote.classList.add('hidden');
     el.stats.classList.add('hidden');
     el.reasonChips.classList.add('hidden');
     hideTable();
@@ -473,6 +515,8 @@
     state.records = [];
     state.stats = null;
     el.resultSub.textContent = (state.sheet ? state.sheet.name + ' · ' : '') + '没有可筛查的数据';
+    el.autoHint.classList.add('hidden');
+    el.modeNote.classList.add('hidden');
     el.stats.classList.add('hidden');
     el.reasonChips.classList.add('hidden');
     hideTable();
@@ -488,8 +532,11 @@
     });
   }
 
-  function renderTimes(parsed, bad) {
+  function renderTimes(parsed, bad, ignoredBlank) {
     if (parsed.kind === 'blank') {
+      if (ignoredBlank) {
+        return '<span class="cell-empty is-ignored" title="早上九点后统计，签退时间不参与判定">空白</span>';
+      }
       return '<span class="cell-empty">空白</span>';
     }
     var display = parsed.display || parsed.raw || '（无法识别）';
@@ -498,12 +545,13 @@
 
   function renderTable(rows) {
     var shown = rows.slice(0, MAX_PREVIEW_ROWS);
+    var morning = isMorning();
     var html = shown.map(function (record) {
       var badIn = record.reasons.indexOf('late-in') !== -1 ||
         record.reasons.indexOf('missing-in') !== -1 ||
         record.reasons.indexOf('bad-in') !== -1;
-      var badOut = record.reasons.indexOf('missing-out') !== -1 ||
-        record.reasons.indexOf('bad-out') !== -1;
+      var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
+        record.reasons.indexOf('bad-out') !== -1);
 
       var nameHtml = record.name
         ? '<span>' + esc(record.name) + '</span>'
@@ -518,7 +566,7 @@
         '<td class="cell-no">' + record.row + '</td>' +
         '<td class="cell-name">' + nameHtml + '</td>' +
         '<td class="cell-time' + (badIn ? ' cell-bad' : '') + '">' + renderTimes(record.signIn, badIn) + '</td>' +
-        '<td class="cell-time' + (badOut ? ' cell-bad' : '') + '">' + renderTimes(record.signOut, badOut) + '</td>' +
+        '<td class="cell-time' + (badOut ? ' cell-bad' : '') + '">' + renderTimes(record.signOut, badOut, morning) + '</td>' +
         '<td>' + statusHtml + '</td>' +
         '</tr>';
     }).join('');
@@ -535,8 +583,8 @@
   }
 
   function renderFooter() {
-    var today = C.todayInfo();
-    el.exportName.textContent = today.header + '.xlsx';
+    var morning = isMorning();
+    el.exportName.textContent = exportTitle() + '.xlsx';
 
     var invalid = state.stats ? state.stats.invalid : 0;
     if (!state.workbook) {
@@ -544,9 +592,9 @@
     } else if (!state.stats) {
       el.exportHint.textContent = '完成列映射并读取数据后即可导出';
     } else if (!invalid) {
-      el.exportHint.textContent = '没有无效记录，无需导出';
+      el.exportHint.textContent = morning ? '没有未签到或迟到的记录，无需导出' : '没有无效记录，无需导出';
     } else {
-      el.exportHint.textContent = '将导出 ' + invalid + ' 条无效记录 · 异常单元格标红';
+      el.exportHint.textContent = '将导出 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录 · 异常单元格标红';
     }
 
     el.exportBtnText.textContent = invalid > 0 ? '导出 Excel（' + invalid + '）' : '导出 Excel';
@@ -554,11 +602,24 @@
     el.copyBtn.disabled = invalid === 0;
   }
 
+  /** 签退时间大面积为空时，提示可以切换到「早上九点后」 */
+  function renderSignOutHint(total, morning) {
+    var blankOut = 0;
+    state.records.forEach(function (record) {
+      if (record.signOut.kind === 'blank') blankOut += 1;
+    });
+    var ratio = total ? blankOut / total : 0;
+    var show = !morning && total > 0 && state.stats.counts['missing-out'] > 0 && ratio >= 0.6;
+    el.autoHint.classList.toggle('hidden', !show);
+    if (show) el.autoHintRatio.textContent = Math.round(ratio * 100) + '%';
+  }
+
   function renderResults() {
     hideMapHint();
     var stats = state.stats;
     var total = stats.total;
     var invalid = stats.invalid;
+    var morning = isMorning();
 
     el.stats.classList.remove('hidden');
     el.filterTabs.classList.remove('hidden');
@@ -567,24 +628,24 @@
     el.statTotal.textContent = String(total);
     el.statInvalid.textContent = String(invalid);
     el.statValid.textContent = String(stats.valid);
+    el.statInvalidLabel.textContent = morning ? '未签到 / 迟到' : '无效记录';
     el.statInvalidFoot.textContent = invalid
       ? '异常率 ' + ((invalid / total) * 100).toFixed(1).replace(/\.0$/, '') + '%'
       : '全部通过';
-    el.statValidFoot.textContent = invalid ? '签到与签退均正常' : '全部记录均正常';
+    el.statValidFoot.textContent = morning
+      ? (invalid ? '9:00 前已完成签到' : '全部在 9:00 前签到')
+      : (invalid ? '签到与签退均正常' : '全部记录均正常');
+
+    el.modeNote.classList.toggle('hidden', !morning);
+    renderSignOutHint(total, morning);
 
     if (invalid > 0) {
-      var definitions = [
-        ['late-in', '签到晚于 9:00'],
-        ['missing-out', '未签退'],
-        ['missing-in', '未签到'],
-        ['bad-in', '签到无法识别'],
-        ['bad-out', '签退无法识别']
-      ];
-      var chips = definitions.filter(function (item) {
-        return stats.counts[item[0]] > 0;
-      }).map(function (item) {
+      var definitions = ['late-in', 'missing-out', 'missing-in', 'bad-in', 'bad-out'];
+      var chips = definitions.filter(function (code) {
+        return stats.counts[code] > 0;
+      }).map(function (code) {
         return '<span class="reason-chip"><span class="chip-dot"></span>' +
-          esc(item[1]) + ' <b>' + stats.counts[item[0]] + '</b></span>';
+          esc(C.REASONS[code]) + ' <b>' + stats.counts[code] + '</b></span>';
       }).join('');
       el.reasonChips.innerHTML = chips +
         '<span class="chips-note">同一人可能同时命中多条规则</span>';
@@ -595,7 +656,9 @@
 
     var sheetName = state.sheet ? state.sheet.name : '';
     el.resultSub.textContent = sheetName + ' · 共 ' + total + ' 条记录' +
-      (invalid ? ' · 发现 ' + invalid + ' 条无效' : ' · 全部有效');
+      (invalid
+        ? ' · 发现 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效')
+        : ' · 全部有效');
 
     var rows = state.filter === 'invalid'
       ? state.records.filter(function (record) { return record.invalid; })
@@ -608,8 +671,10 @@
       showEmptyState({
         icon: ICONS.success,
         tone: 'green',
-        title: '本次没有发现无效记录',
-        text: '所有记录均满足签到时间不晚于 09:00:00，且签退时间不为空白。',
+        title: morning ? '没有未签到或迟到的记录' : '本次没有发现无效记录',
+        text: morning
+          ? '所有记录都在 09:00:00 前完成了签到，签退时间不参与判定。'
+          : '所有记录均满足签到时间早于 09:00:00，且签退时间不为空白。',
         steps:
           '<div class="empty-steps">' +
           '<span class="empty-step"><i>✓</i>' + total + ' 条记录全部通过</span>' +
@@ -821,6 +886,12 @@
     setCellStyle(cell, bad, zebra);
   }
 
+  function setTextCell(cell, text, zebra) {
+    if (text) cell.value = text;
+    setCellStyle(cell, false, zebra);
+    cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false };
+  }
+
   function downloadBlob(blob, fileName) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
@@ -843,6 +914,8 @@
     if (!invalidRecords.length) return;
 
     var today = C.todayInfo();
+    var title = exportTitle();
+    var morning = isMorning();
     var originalText = el.exportBtnText.textContent;
     el.exportBtn.disabled = true;
     el.exportBtnText.textContent = '正在生成…';
@@ -852,7 +925,7 @@
       workbook.creator = '打卡无效记录筛查';
       workbook.created = new Date();
 
-      var worksheet = workbook.addWorksheet('打卡无效人员', {
+      var worksheet = workbook.addWorksheet(morning ? '未签到与迟到人员' : '打卡无效人员', {
         views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
         pageSetup: {
           paperSize: 9,
@@ -864,13 +937,19 @@
         }
       });
       worksheet.properties.defaultRowHeight = 20;
-      worksheet.columns = [{ width: 22 }, { width: 24 }, { width: 24 }];
+      worksheet.columns = morning
+        ? [{ width: 22 }, { width: 24 }, { width: 34 }]
+        : [{ width: 22 }, { width: 24 }, { width: 24 }, { width: 34 }];
+
+      var titles = morning
+        ? [title, '签到时间', '异常原因']
+        : [title, '签到时间', '签退时间', '异常原因'];
 
       var header = worksheet.getRow(1);
       header.height = 30;
-      [today.header, '签到时间', '签退时间'].forEach(function (title, index) {
+      titles.forEach(function (heading, index) {
         var cell = header.getCell(index + 1);
-        cell.value = title;
+        cell.value = heading;
         cell.font = { name: '等线', size: 11, bold: true, color: { argb: 'FFFFFFFF' } };
         cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: false };
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } };
@@ -886,26 +965,35 @@
         var badIn = record.reasons.indexOf('late-in') !== -1 ||
           record.reasons.indexOf('missing-in') !== -1 ||
           record.reasons.indexOf('bad-in') !== -1;
-        var badOut = record.reasons.indexOf('missing-out') !== -1 ||
-          record.reasons.indexOf('bad-out') !== -1;
+        var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
+          record.reasons.indexOf('bad-out') !== -1);
         var zebra = index % 2 === 1;
+        var name = record.name || '';
+        var reason = record.reasonLabels.join('、');
 
-        var row = worksheet.addRow([record.name || '', null, null]);
+        var row = morning
+          ? worksheet.addRow([name || null, null, reason])
+          : worksheet.addRow([name || null, null, null, reason]);
         row.height = 22;
-        setCellStyle(row.getCell(1), false, zebra);
+        setTextCell(row.getCell(1), name, zebra);
         setTimeCell(row.getCell(2), record.signIn, badIn, zebra);
-        setTimeCell(row.getCell(3), record.signOut, badOut, zebra);
+        if (morning) {
+          setTextCell(row.getCell(3), reason, zebra);
+        } else {
+          setTimeCell(row.getCell(3), record.signOut, badOut, zebra);
+          setTextCell(row.getCell(4), reason, zebra);
+        }
       });
 
-      worksheet.autoFilter = 'A1:C' + (invalidRecords.length + 1);
-      worksheet.headerFooter.oddFooter = '&L' + today.full + '&C第 &P 页 / 共 &N 页&R打卡无效记录筛查';
+      worksheet.autoFilter = 'A1:' + C.columnLetter(titles.length) + (invalidRecords.length + 1);
+      worksheet.headerFooter.oddFooter = '&L' + today.full + '&C第 &P 页 / 共 &N 页&R' + title;
 
       var buffer = await workbook.xlsx.writeBuffer();
       var blob = new Blob([buffer], {
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
-      downloadBlob(blob, today.header + '.xlsx');
-      showToast('已导出 ' + invalidRecords.length + ' 条无效记录');
+      downloadBlob(blob, title + '.xlsx');
+      showToast('已导出 ' + invalidRecords.length + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录');
     } catch (err) {
       console.error(err);
       showToast('导出失败：' + (err && err.message ? err.message : '未知错误'), 'error');
@@ -1047,6 +1135,22 @@
       if (scroller) scroller.scrollTop = 0;
     });
 
+    el.modeTabs.addEventListener('click', function (event) {
+      var button = event.target.closest('.seg-btn');
+      if (!button) return;
+      var mode = button.getAttribute('data-mode');
+      if (!mode || mode === state.mode) return;
+      setMode(mode);
+      showToast(isMorning()
+        ? '已切换到「早上九点后」：签退时间不参与判定'
+        : '已切换回「全天考勤」：签到、签退都要检查', 'info');
+    });
+
+    el.autoHintBtn.addEventListener('click', function () {
+      setMode(C.MODES.MORNING);
+      showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+    });
+
     el.copyBtn.addEventListener('click', copyNames);
     el.exportBtn.addEventListener('click', exportExcel);
   }
@@ -1059,6 +1163,7 @@
     }
     if (el.todayText) el.todayText.textContent = '今天 · ' + C.todayInfo().monthDay + ' ' + C.todayInfo().weekday;
     bindEvents();
+    renderModeControls();
     renderInitial();
   }
 

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="上传考勤 Excel，自动筛查签到晚于 9:00 或未签退的记录，并导出标红结果。">
+  <meta name="description" content="上传考勤 Excel，自动筛查 9:00 及以后签到（9:00 整也算迟到）、未签到或未签退的记录，并导出标红结果。">
   <title>打卡无效记录筛查</title>
   <style>
 /*__STYLE__*/
@@ -152,11 +152,11 @@
         <div class="map-hint hidden" id="mapHint"></div>
 
         <div class="rule-box">
-          <div class="rule-title">判定规则 <span>满足任一即无效</span></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签到时间晚于 09:00:00</span><b>无效</b></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签退时间为空白</span><b>无效</b></div>
+          <div class="rule-title">判定规则 <span id="ruleBadge">满足任一即无效</span></div>
+          <div class="rule-item"><span class="rule-dot"></span><span>签到时间 ≥ 09:00:00</span><b>无效</b></div>
           <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
-          <p>只比较时:分:秒，忽略日期；09:00:00 整视为有效。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。</p>
+          <div class="rule-item" id="ruleOut"><span class="rule-dot"></span><span>签退时间为空白</span><b id="ruleOutBadge">无效</b></div>
+          <p id="ruleNote">只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。</p>
         </div>
       </section>
     </aside>
@@ -170,13 +170,32 @@
             <p id="resultSub">上传文件后自动生成</p>
           </div>
         </div>
-        <div class="segmented" id="filterTabs">
-          <button class="seg-btn is-active" type="button" data-filter="all">全部</button>
-          <button class="seg-btn" type="button" data-filter="invalid">仅无效</button>
+        <div class="result-tools">
+          <div class="segmented" id="modeTabs" role="group" aria-label="统计场景">
+            <button class="seg-btn is-active" type="button" data-mode="full" aria-pressed="true" title="签到、签退都检查">全天考勤</button>
+            <button class="seg-btn" type="button" data-mode="morning" aria-pressed="false" title="早上九点后：只检查签到，签退为空不算异常">早上九点后</button>
+          </div>
+          <div class="segmented" id="filterTabs">
+            <button class="seg-btn is-active" type="button" data-filter="all">全部</button>
+            <button class="seg-btn" type="button" data-filter="invalid">仅无效</button>
+          </div>
         </div>
       </div>
 
       <div class="result-body" id="resultBody">
+        <div class="auto-hint hidden" id="autoHint">
+          <div class="auto-hint-text">
+            <b>有 <span id="autoHintRatio">0%</span> 的记录签退时间为空</b>
+            <span>如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。</span>
+          </div>
+          <button class="btn btn-hint" id="autoHintBtn" type="button">只看签到</button>
+        </div>
+
+        <div class="mode-note hidden" id="modeNote">
+          <span class="mode-note-tag">早上九点后</span>
+          <span>签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。</span>
+        </div>
+
         <div class="stats hidden" id="stats">
           <div class="stat">
             <div class="stat-label">记录总数</div>
@@ -184,7 +203,7 @@
             <div class="stat-foot">已跳过空白行</div>
           </div>
           <div class="stat stat-invalid">
-            <div class="stat-label">无效记录</div>
+            <div class="stat-label" id="statInvalidLabel">无效记录</div>
             <div class="stat-value" id="statInvalid">0</div>
             <div class="stat-foot" id="statInvalidFoot">待筛查</div>
           </div>

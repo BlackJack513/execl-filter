@@ -11,8 +11,12 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var CUTOFF_SECONDS = 9 * 3600; // 09:00:00
+  var CUTOFF_SECONDS = 9 * 3600; // 09:00:00，到达该时刻即算迟到
   var EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30); // Excel 1900 日期系统
+  // 两种统计场景：
+  //   full    全天考勤——签到、签退都要检查
+  //   morning 早上九点后——签退时间通常还都是空的，只检查签到
+  var MODES = { FULL: 'full', MORNING: 'morning' };
   var PLACEHOLDERS = [
     '-', '--', '---', '—', '——', '–', '/', '\\', '无', '空', '未打卡',
     '未签退', '未签到', '待打卡', 'n/a', 'na', 'null', 'none'
@@ -247,27 +251,43 @@
   var REASONS = {
     'missing-in': '未签到',
     'bad-in': '签到时间无法识别',
-    'late-in': '签到晚于 9:00',
+    'late-in': '迟到（≥ 9:00）',
     'missing-out': '未签退',
     'bad-out': '签退时间无法识别'
   };
 
-  /** 按规则判定一条记录 */
-  function evaluateRecord(signIn, signOut, cutoffSeconds) {
-    var cutoff = typeof cutoffSeconds === 'number' ? cutoffSeconds : CUTOFF_SECONDS;
+  /**
+   * 按规则判定一条记录
+   * options.mode          'full'（默认）全天考勤 | 'morning' 仅看签到
+   * options.cutoffSeconds 迟到分界，默认 09:00:00，到达即判迟到
+   */
+  function evaluateRecord(signIn, signOut, options) {
+    var mode = MODES.FULL;
+    var cutoff = CUTOFF_SECONDS;
+    if (typeof options === 'number') {
+      cutoff = options; // 兼容旧签名 evaluateRecord(in, out, cutoffSeconds)
+    } else if (options) {
+      if (typeof options.cutoffSeconds === 'number') cutoff = options.cutoffSeconds;
+      if (options.mode === MODES.MORNING) mode = MODES.MORNING;
+    }
+
     var reasons = [];
     if (signIn.kind === 'blank') {
       reasons.push('missing-in');
     } else if (signIn.kind === 'invalid') {
       reasons.push('bad-in');
-    } else if (signIn.seconds > cutoff) {
+    } else if (signIn.seconds >= cutoff) {
+      // 09:00:00 整也判为迟到
       reasons.push('late-in');
     }
 
-    if (signOut.kind === 'blank') {
-      reasons.push('missing-out');
-    } else if (signOut.kind === 'invalid') {
-      reasons.push('bad-out');
+    // 早上九点后统计：签退时间此时通常都是空的，不参与判定
+    if (mode !== MODES.MORNING) {
+      if (signOut.kind === 'blank') {
+        reasons.push('missing-out');
+      } else if (signOut.kind === 'invalid') {
+        reasons.push('bad-out');
+      }
     }
 
     return {
@@ -405,6 +425,7 @@
 
   return {
     CUTOFF_SECONDS: CUTOFF_SECONDS,
+    MODES: MODES,
     REASONS: REASONS,
     normalizeCellValue: normalizeCellValue,
     parseTimeString: parseTimeString,
