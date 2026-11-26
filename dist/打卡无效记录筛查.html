@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="上传考勤 Excel，自动筛查 9:00 及以后签到（9:00 整也算迟到）、未签到或未签退的记录，并导出标红结果。">
+  <meta name="description" content="上传考勤 Excel，自动筛查 9:00 及以后签到（9:00 整也算迟到）、未签到或未签退的记录，以及加班卡签到、签退是否合规，并导出标红结果。">
   <title>打卡无效记录筛查</title>
   <style>
 /* ============ 基础 ============ */
@@ -410,6 +410,7 @@ svg {
 }
 
 .field input[type="number"],
+.field input[type="time"],
 .field select,
 .sheet-select {
   width: 100%;
@@ -424,9 +425,12 @@ svg {
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
-.field input[type="number"] {
+.field input[type="number"],
+.field input[type="time"] {
   font-variant-numeric: tabular-nums;
 }
+
+
 
 .field input:focus,
 .field select:focus {
@@ -598,6 +602,46 @@ svg {
   font-size: 10px;
   line-height: 1.65;
   color: #9a6a63;
+}
+
+/* 加班卡规则配置 */
+.overtime-box {
+  margin-top: 12px;
+  padding: 13px 13px 12px;
+  border: 1px solid #d6e4ff;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdff, #f3f8ff);
+}
+
+.overtime-box .rule-title {
+  color: #1741b6;
+}
+
+.overtime-box .rule-title > span {
+  background: #dbe7ff;
+  color: #1741b6;
+}
+
+.overtime-box .field {
+  margin-top: 9px;
+}
+
+.overtime-box .field > span {
+  color: #1d4ed8;
+}
+
+.overtime-box p {
+  margin: 9px 0 0;
+  font-size: 10px;
+  line-height: 1.65;
+  color: #5b77b5;
+}
+
+.overtime-box .ot-detect {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed #dbe7ff;
+  color: #3f5f9e;
 }
 
 /* ============ 结果 ============ */
@@ -1055,6 +1099,78 @@ svg {
 .badge-valid {
   color: #067647;
   background: #dcfae6;
+}
+
+/* 缺加班签到（仅签退）：橙色单独标注 */
+.badge + .badge {
+  margin-left: 4px;
+}
+
+.badge-partial {
+  color: #b54708;
+  background: #fffaeb;
+  box-shadow: inset 0 0 0 1px #fedf89;
+}
+
+.status-reasons.is-partial {
+  color: #b54708;
+}
+
+.preview-table tbody tr.is-partial-row {
+  background: #fffdf6;
+}
+
+.preview-table tbody tr.is-partial-row:hover {
+  background: #fffaeb;
+}
+
+.preview-table tbody tr.is-partial-row td:first-child {
+  box-shadow: inset 3px 0 0 #f79009;
+}
+
+.reason-chip.is-partial {
+  border-color: #fedf89;
+  background: #fffaeb;
+}
+
+.reason-chip.is-partial b {
+  color: #b54708;
+}
+
+.reason-chip.is-partial .chip-dot {
+  background: #f79009;
+}
+
+/* 加班未打卡（签到、签退均为空）：红色单独标注 */
+.badge-missing {
+  color: var(--red-2);
+  background: #fee4e2;
+  box-shadow: inset 0 0 0 1px #fecdca;
+}
+
+.status-reasons.is-missing {
+  color: var(--red-2);
+}
+
+.preview-table tbody tr.is-missing-row {
+  background: #fffbfa;
+}
+
+.preview-table tbody tr.is-missing-row:hover {
+  background: #fff6f4;
+}
+
+.reason-chip.is-missing {
+  border-color: #fecdca;
+  background: #fef3f2;
+}
+
+.reason-chip.is-missing b {
+  color: var(--red-2);
+}
+
+.reason-chip.is-missing .chip-dot {
+  background: var(--red);
 }
 
 .status-reasons {
@@ -1714,10 +1830,37 @@ select::-webkit-scrollbar {
 
         <div class="rule-box">
           <div class="rule-title">判定规则 <span id="ruleBadge">满足任一即无效</span></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签到时间 ≥ 09:00:00</span><b>无效</b></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
-          <div class="rule-item" id="ruleOut"><span class="rule-dot"></span><span>签退时间为空白</span><b id="ruleOutBadge">无效</b></div>
+          <div id="plainRules">
+            <div class="rule-item"><span class="rule-dot"></span><span>签到时间 ≥ 09:00:00</span><b>无效</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
+            <div class="rule-item" id="ruleOut"><span class="rule-dot"></span><span>签退时间为空白</span><b id="ruleOutBadge">无效</b></div>
+          </div>
+          <div id="otRules" class="hidden">
+            <div class="rule-item"><span class="rule-dot"></span><span id="otRuleInText">签到不在 18:00–19:00</span><b>异常</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span id="otRuleOutText">签退早于 21:00</span><b>异常</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span>签到或签退为空白</span><b>异常</b></div>
+          </div>
           <p id="ruleNote">只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。</p>
+        </div>
+
+        <div class="overtime-box">
+          <div class="rule-title overtime-title">加班卡规则 <span>加班打卡场景生效</span></div>
+          <div class="field-grid">
+            <label class="field">
+              <span>签到开始</span>
+              <input id="otInStart" type="time" step="60" value="18:00" disabled>
+            </label>
+            <label class="field">
+              <span>签到截止</span>
+              <input id="otInEnd" type="time" step="60" value="19:00" disabled>
+            </label>
+          </div>
+          <label class="field">
+            <span>最早签退</span>
+            <input id="otOutFrom" type="time" step="60" value="21:00" disabled>
+          </label>
+          <p id="otNote">当前按 18:00–19:00 签到、21:00 起签退判定，仅「加班打卡」场景生效。</p>
+          <p class="ot-detect">识别方式：同一人同一天第一次出现算正常卡，第二次及以后算加班卡；只有加班签退、或加班签到签退都为空，都会单独标注。</p>
         </div>
       </section>
     </aside>
@@ -1735,6 +1878,7 @@ select::-webkit-scrollbar {
           <div class="segmented" id="modeTabs" role="group" aria-label="统计场景">
             <button class="seg-btn is-active" type="button" data-mode="full" aria-pressed="true" title="签到、签退都检查">全天考勤</button>
             <button class="seg-btn" type="button" data-mode="morning" aria-pressed="false" title="早上九点后：只检查签到，签退为空不算异常">早上九点后</button>
+            <button class="seg-btn" type="button" data-mode="overtime" aria-pressed="false" title="加班打卡：18:00-19:00 签到，21:00 后签退（可配置）">加班打卡</button>
           </div>
           <div class="segmented" id="filterTabs">
             <button class="seg-btn is-active" type="button" data-filter="all">全部</button>
@@ -1746,15 +1890,15 @@ select::-webkit-scrollbar {
       <div class="result-body" id="resultBody">
         <div class="auto-hint hidden" id="autoHint">
           <div class="auto-hint-text">
-            <b>有 <span id="autoHintRatio">0%</span> 的记录签退时间为空</b>
-            <span>如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。</span>
+            <b id="autoHintTitle">有 0% 的记录签退时间为空</b>
+            <span id="autoHintText">如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。</span>
           </div>
           <button class="btn btn-hint" id="autoHintBtn" type="button">只看签到</button>
         </div>
 
         <div class="mode-note hidden" id="modeNote">
-          <span class="mode-note-tag">早上九点后</span>
-          <span>签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。</span>
+          <span class="mode-note-tag" id="modeNoteTag">早上九点后</span>
+          <span id="modeNoteText">签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。</span>
         </div>
 
         <div class="stats hidden" id="stats">
@@ -1785,8 +1929,8 @@ select::-webkit-scrollbar {
                 <tr>
                   <th class="col-no">行号</th>
                   <th>姓名</th>
-                  <th>签到时间</th>
-                  <th>签退时间</th>
+                  <th id="thIn">签到时间</th>
+                  <th id="thOut">签退时间</th>
                   <th class="col-status">判定</th>
                 </tr>
               </thead>
@@ -1900,10 +2044,19 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   var CUTOFF_SECONDS = 9 * 3600; // 09:00:00，到达该时刻即算迟到
   var EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30); // Excel 1900 日期系统
-  // 两种统计场景：
-  //   full    全天考勤——签到、签退都要检查
-  //   morning 早上九点后——签退时间通常还都是空的，只检查签到
-  var MODES = { FULL: 'full', MORNING: 'morning' };
+  // 加班卡默认规则：18:00-19:00 签到，21:00 起签退
+  var OVERTIME_DEFAULTS = {
+    inStartSeconds: 18 * 3600,
+    inEndSeconds: 19 * 3600,
+    outFromSeconds: 21 * 3600
+  };
+  // 加班卡兜底识别：有数据且签到晚于 16:00 的行视为加班卡
+  var OVERTIME_DETECT_SECONDS = 16 * 3600;
+  // 三种统计场景：
+  //   full     全天考勤——签到、签退都要检查
+  //   morning  早上九点后——签退时间通常还都是空的，只检查签到
+  //   overtime 加班打卡——只看加班卡，按加班签到/签退时间段判定
+  var MODES = { FULL: 'full', MORNING: 'morning', OVERTIME: 'overtime' };
   var PLACEHOLDERS = [
     '-', '--', '---', '—', '——', '–', '/', '\\', '无', '空', '未打卡',
     '未签退', '未签到', '待打卡', 'n/a', 'na', 'null', 'none'
@@ -2140,8 +2293,128 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     'bad-in': '签到时间无法识别',
     'late-in': '迟到（≥ 9:00）',
     'missing-out': '未签退',
-    'bad-out': '签退时间无法识别'
+    'bad-out': '签退时间无法识别',
+    'ot-missing-in': '未签到',
+    'ot-bad-in': '签到时间无法识别',
+    'ot-early-in': '签到早于规定时间',
+    'ot-late-in': '签到晚于规定时间',
+    'ot-missing-out': '未签退',
+    'ot-bad-out': '签退时间无法识别',
+    'ot-early-out': '签退早于规定时间',
+    'ot-only-out': '缺加班签到（仅签退）',
+    'ot-blank': '加班未打卡（签到、签退均为空）'
   };
+
+  /** 秒数格式化为 hh:mm，用于规则文案 */
+  function formatClock(seconds) {
+    if (typeof seconds !== 'number' || !isFinite(seconds)) return '';
+    var s = Math.round(seconds) % 86400;
+    return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60));
+  }
+
+  /** 解析界面上 hh:mm 形式的配置，无法识别时返回 null */
+  function parseClockSeconds(value) {
+    var parsed = parseTimeString(value);
+    return parsed.kind === 'time' ? parsed.seconds : null;
+  }
+
+  function pickSeconds(value, fallback) {
+    return typeof value === 'number' && isFinite(value) ? value : fallback;
+  }
+
+  /** 签退日期是否晚于签到日期（跨天加班） */
+  function isCrossDay(signIn, signOut) {
+    if (!signIn || !signOut) return false;
+    if (signIn.kind !== 'time' || signOut.kind !== 'time') return false;
+    if (!signIn.hasDate || !signOut.hasDate) return false;
+    var a = signIn.parts;
+    var b = signOut.parts;
+    if (!a || !b) return false;
+    if (b.y !== a.y) return b.y > a.y;
+    if (b.mo !== a.mo) return b.mo > a.mo;
+    return b.d > a.d;
+  }
+
+  function dateKeyOf(parsed) {
+    if (!parsed || parsed.kind !== 'time' || !parsed.hasDate || !parsed.parts) return '';
+    var p = parsed.parts;
+    return p.y + '-' + p.mo + '-' + p.d;
+  }
+
+  function recordDateKey(signIn, signOut) {
+    return dateKeyOf(signIn) || dateKeyOf(signOut);
+  }
+
+  function isOvertimeRow(item, outFrom) {
+    if (item.signIn.kind === 'time' && item.signIn.seconds >= OVERTIME_DETECT_SECONDS) return true;
+    // 只打了加班签退、没打加班签到
+    return item.signIn.kind === 'blank' &&
+      item.signOut.kind === 'time' &&
+      item.signOut.seconds >= outFrom;
+  }
+
+  /**
+   * 标记加班卡（考勤系统导出的「打卡类型」永远是传统打卡，只能靠行结构判断）：
+   *   1. 同一人同一日期出现第一次 = 正常卡，第二次及以后 = 加班卡；
+   *   2. 有数据的加班行：签到晚于 16:00，或签到空白但签退不早于最早签退时间；
+   *   3. 第二次出现但签到、签退都为空：加班卡未打卡，标为 blankOvertime；
+   *   4. 第一次出现就是空白、且后面还有正常卡时，视为导出填充行，跳过（skip）。
+   * 返回值与入参为同一数组，逐项带上 overtime / blankOvertime / skip 标记。
+   */
+  function classifyAttendanceRows(items, options) {
+    options = options || {};
+    var outFrom = pickSeconds(options.outFromSeconds, OVERTIME_DEFAULTS.outFromSeconds);
+    var groups = {};
+    var order = [];
+
+    items.forEach(function (item) {
+      item.overtime = false;
+      item.blankOvertime = false;
+      item.skip = false;
+      var name = trimText(item.name);
+      var dateKey = trimText(item.dateKey) || recordDateKey(item.signIn, item.signOut);
+      var key = name + '\u0000' + dateKey;
+      if (!groups[key]) {
+        groups[key] = [];
+        order.push(key);
+      }
+      groups[key].push(item);
+    });
+
+    order.forEach(function (key) {
+      var list = groups[key];
+      var hasData = list.map(function (item) {
+        return !(item.signIn.kind === 'blank' && item.signOut.kind === 'blank');
+      });
+
+      list.forEach(function (item, pos) {
+        if (hasData[pos]) {
+          item.overtime = isOvertimeRow(item, outFrom);
+          return;
+        }
+
+        // 第二次及以后出现，即使签到、签退都为空，也属于加班卡未打卡
+        if (pos > 0) {
+          item.overtime = true;
+          item.blankOvertime = true;
+          return;
+        }
+
+        // 第一次出现就是空白：后面还有正常卡时，这是导出填充行
+        var laterNormal = false;
+        for (var i = 1; i < list.length; i++) {
+          if (!hasData[i]) continue;
+          if (!isOvertimeRow(list[i], outFrom)) {
+            laterNormal = true;
+            break;
+          }
+        }
+        item.skip = laterNormal;
+      });
+    });
+
+    return items;
+  }
 
   /**
    * 按规则判定一条记录
@@ -2184,18 +2457,81 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     };
   }
 
+  /**
+   * 加班卡判定：签到需落在加班签到时间段内，签退不早于最早签退时间。
+   * options.inStartSeconds / inEndSeconds / outFromSeconds 均可配置。
+   */
+  function evaluateOvertimeRecord(signIn, signOut, options) {
+    options = options || {};
+    var inStart = pickSeconds(options.inStartSeconds, OVERTIME_DEFAULTS.inStartSeconds);
+    var inEnd = pickSeconds(options.inEndSeconds, OVERTIME_DEFAULTS.inEndSeconds);
+    var outFrom = pickSeconds(options.outFromSeconds, OVERTIME_DEFAULTS.outFromSeconds);
+
+    var reasons = [];
+    var labels = [];
+
+    function push(code, label) {
+      reasons.push(code);
+      labels.push(label || REASONS[code] || code);
+    }
+
+    // 加班段签到、签退都为空：整条加班卡未打卡
+    if (signIn.kind === 'blank' && signOut.kind === 'blank') {
+      push('ot-blank', '加班未打卡（签到、签退均为空）');
+      return {
+        invalid: true,
+        reasons: reasons,
+        reasonLabels: labels
+      };
+    }
+
+    if (signIn.kind === 'blank') {
+      if (signOut.kind === 'time') {
+        // 加班段必须「签到 + 签退」齐全，只有签退单独标注
+        push('ot-only-out', '缺加班签到（仅签退）');
+      } else {
+        push('ot-missing-in', '未签到');
+      }
+    } else if (signIn.kind === 'invalid') {
+      push('ot-bad-in', '签到时间无法识别');
+    } else if (signIn.seconds < inStart) {
+      push('ot-early-in', '签到早于 ' + formatClock(inStart));
+    } else if (signIn.seconds > inEnd) {
+      push('ot-late-in', '签到晚于 ' + formatClock(inEnd));
+    }
+
+    if (signOut.kind === 'blank') {
+      push('ot-missing-out', '未签退');
+    } else if (signOut.kind === 'invalid') {
+      push('ot-bad-out', '签退时间无法识别');
+    } else if (!isCrossDay(signIn, signOut) && signOut.seconds < outFrom) {
+      // 跨天签退（次日凌晨）视为正常
+      push('ot-early-out', '签退早于 ' + formatClock(outFrom));
+    }
+
+    return {
+      invalid: reasons.length > 0,
+      reasons: reasons,
+      reasonLabels: labels
+    };
+  }
+
   function computeStats(records) {
     var stats = {
       total: records.length,
       invalid: 0,
       valid: 0,
-      counts: { 'late-in': 0, 'missing-in': 0, 'bad-in': 0, 'missing-out': 0, 'bad-out': 0 }
+      counts: {},
+      labels: {}
     };
     records.forEach(function (record) {
       if (record.invalid) stats.invalid += 1;
       else stats.valid += 1;
-      record.reasons.forEach(function (code) {
-        if (stats.counts[code] != null) stats.counts[code] += 1;
+      record.reasons.forEach(function (code, index) {
+        stats.counts[code] = (stats.counts[code] || 0) + 1;
+        if (record.reasonLabels && record.reasonLabels[index]) {
+          stats.labels[code] = record.reasonLabels[index];
+        }
       });
     });
     return stats;
@@ -2212,6 +2548,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       if (s === '姓名') return 100;
       if (s.indexOf('姓名') !== -1) return 90;
       if (s === '名字' || s.indexOf('员工姓名') !== -1) return 80;
+      return 0;
+    }
+    if (field === 'date') {
+      if (s === '日期') return 100;
+      if (s === '考勤日期' || s === '打卡日期') return 95;
+      if (s.indexOf('日期') !== -1) return 80;
       return 0;
     }
     if (/地点|地址|位置|状态|类型|结果|日期/.test(s)) return 0;
@@ -2234,9 +2576,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   /** 根据表头自动识别三列，返回 1 基列号或 null */
   function autoMapHeaders(headers) {
-    var result = { name: null, in: null, out: null };
+    var result = { name: null, in: null, out: null, date: null };
     var used = {};
-    ['name', 'in', 'out'].forEach(function (field) {
+    ['name', 'in', 'out', 'date'].forEach(function (field) {
       var bestCol = null;
       var bestScore = 0;
       for (var i = 0; i < headers.length; i++) {
@@ -2312,13 +2654,20 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   return {
     CUTOFF_SECONDS: CUTOFF_SECONDS,
+    OVERTIME_DEFAULTS: OVERTIME_DEFAULTS,
+    OVERTIME_DETECT_SECONDS: OVERTIME_DETECT_SECONDS,
     MODES: MODES,
     REASONS: REASONS,
     normalizeCellValue: normalizeCellValue,
     parseTimeString: parseTimeString,
     parseTimeValue: parseTimeValue,
     parseSerial: parseSerial,
+    formatClock: formatClock,
+    parseClockSeconds: parseClockSeconds,
+    isCrossDay: isCrossDay,
     evaluateRecord: evaluateRecord,
+    evaluateOvertimeRecord: evaluateOvertimeRecord,
+    classifyAttendanceRows: classifyAttendanceRows,
     computeStats: computeStats,
     autoMapHeaders: autoMapHeaders,
     toExcelCell: toExcelCell,
@@ -2364,7 +2713,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     records: [],
     stats: null,
     filter: 'all',
-    mode: 'full'
+    mode: 'full',
+    overtime: { inStart: '18:00', inEnd: '19:00', outFrom: '21:00' },
+    skippedOvertime: 0,
+    autoHintAction: ''
   };
 
   var ICONS = {
@@ -2405,11 +2757,12 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       'settingsCard', 'headerRowInput', 'dataStartInput', 'sheetSelect',
       'nameCol', 'inCol', 'outCol', 'nameSample', 'inSample', 'outSample',
       'remapBtn', 'mapHint', 'resultCard', 'resultSub', 'modeTabs', 'filterTabs',
-      'autoHint', 'autoHintRatio', 'autoHintBtn', 'modeNote',
+      'autoHint', 'autoHintTitle', 'autoHintText', 'autoHintBtn', 'modeNote', 'modeNoteTag', 'modeNoteText',
       'stats', 'statTotal', 'statInvalid', 'statValid', 'statInvalidLabel', 'statInvalidFoot', 'statValidFoot',
-      'reasonChips', 'tableShell', 'previewBody', 'tableFoot', 'emptyState',
+      'reasonChips', 'tableShell', 'previewBody', 'tableFoot', 'emptyState', 'thIn', 'thOut',
       'exportName', 'exportHint', 'copyBtn', 'exportBtn', 'exportBtnText',
-      'ruleBadge', 'ruleOut', 'ruleOutBadge', 'ruleNote',
+      'ruleBadge', 'plainRules', 'ruleOut', 'ruleOutBadge', 'ruleNote',
+      'otRules', 'otRuleInText', 'otRuleOutText', 'otInStart', 'otInEnd', 'otOutFrom', 'otNote',
       'loading', 'loadingFile', 'toast', 'todayText'
     ].forEach(function (id) {
       el[id] = $(id);
@@ -2445,8 +2798,35 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return state.mode === C.MODES.MORNING;
   }
 
+  /** 当前是否为「加班打卡」场景 */
+  function isOvertime() {
+    return state.mode === C.MODES.OVERTIME;
+  }
+
+  function overtimeOptions() {
+    return {
+      inStartSeconds: C.parseClockSeconds(state.overtime.inStart),
+      inEndSeconds: C.parseClockSeconds(state.overtime.inEnd),
+      outFromSeconds: C.parseClockSeconds(state.overtime.outFrom)
+    };
+  }
+
+  /** 当前加班规则的可读文案（配置为空时回退到默认值） */
+  function overtimeRule() {
+    var defaults = C.OVERTIME_DEFAULTS;
+    var start = overtimeOptions().inStartSeconds;
+    var end = overtimeOptions().inEndSeconds;
+    var outFrom = overtimeOptions().outFromSeconds;
+    return {
+      inStart: C.formatClock(start == null ? defaults.inStartSeconds : start),
+      inEnd: C.formatClock(end == null ? defaults.inEndSeconds : end),
+      outFrom: C.formatClock(outFrom == null ? defaults.outFromSeconds : outFrom)
+    };
+  }
+
   function exportTitle() {
     var today = C.todayInfo();
+    if (isOvertime()) return today.monthDay + '加班打卡异常人员';
     return today.monthDay + '打卡' + (isMorning() ? '迟到与未打卡' : '无效') + '人员';
   }
 
@@ -2634,17 +3014,24 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     if (state.dataStart <= state.headerRow) return '数据起始行必须大于表头所在行。';
     if (!state.headers.length) return '当前工作表没有可读取的列，请检查表头行设置。';
 
-    var selected = [state.mapping.name, state.mapping.in, state.mapping.out];
-    if (selected[0] === selected[1] || selected[0] === selected[2] || selected[1] === selected[2]) {
-      return '姓名、签到时间、签退时间不能选择同一列。';
+    var columns = [state.mapping.name, state.mapping.in, state.mapping.out];
+    for (var i = 0; i < columns.length; i++) {
+      for (var j = i + 1; j < columns.length; j++) {
+        if (columns[i] && columns[i] === columns[j]) {
+          return '姓名、签到时间、签退时间不能选择同一列。';
+        }
+      }
     }
     return '';
   }
 
   function buildRecords() {
-    var records = [];
     var mapping = state.mapping;
     var lastRow = Math.min(state.rowCount, MAX_ROWS);
+    var overtimeMode = isOvertime();
+    var rows = [];
+    var auto = C.autoMapHeaders(state.headers.map(function (header) { return header.text; }));
+    var dateCol = auto.date;
 
     for (var r = state.dataStart; r <= lastRow; r++) {
       var nameCell = state.sheet.getCell(r, mapping.name);
@@ -2657,17 +3044,48 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
       if (!name && signIn.kind === 'blank' && signOut.kind === 'blank') continue;
 
-      var evaluation = C.evaluateRecord(signIn, signOut, { mode: state.mode });
-      records.push({
+      rows.push({
         row: r,
         name: name,
+        dateKey: dateCol ? readCellText(state.sheet.getCell(r, dateCol)) : '',
         signIn: signIn,
-        signOut: signOut,
+        signOut: signOut
+      });
+    }
+
+    // 打卡类型列不可信：同人同日期多行时，按签到时间区分正常卡与加班卡
+    C.classifyAttendanceRows(rows, overtimeOptions());
+
+    var records = [];
+    var skippedOvertime = 0;
+
+    rows.forEach(function (item) {
+      if (item.skip) return;
+
+      if (overtimeMode) {
+        if (!item.overtime) return;
+      } else if (item.overtime) {
+        skippedOvertime += 1;
+        return;
+      }
+
+      var evaluation = overtimeMode
+        ? C.evaluateOvertimeRecord(item.signIn, item.signOut, overtimeOptions())
+        : C.evaluateRecord(item.signIn, item.signOut, { mode: state.mode });
+
+      records.push({
+        row: item.row,
+        name: item.name,
+        overtime: item.overtime,
+        signIn: item.signIn,
+        signOut: item.signOut,
         invalid: evaluation.invalid,
         reasons: evaluation.reasons,
         reasonLabels: evaluation.reasonLabels
       });
-    }
+    });
+
+    state.skippedOvertime = skippedOvertime;
     return records;
   }
 
@@ -2741,22 +3159,39 @@ https://github.com/nodeca/pako/blob/main/LICENSE
   /** 同步「统计场景」按钮与左侧判定规则说明 */
   function renderModeControls() {
     var morning = isMorning();
+    var overtime = isOvertime();
+    var rule = overtimeRule();
+
     Array.prototype.forEach.call(el.modeTabs.querySelectorAll('.seg-btn'), function (btn) {
       var active = btn.getAttribute('data-mode') === state.mode;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
-    el.ruleBadge.textContent = morning ? '只看签到' : '满足任一即无效';
-    el.ruleOut.classList.toggle('is-off', morning);
-    el.ruleOutBadge.textContent = morning ? '不校验' : '无效';
-    el.ruleNote.textContent = morning
-      ? '早上九点后统计：签退时间此时通常都是空的，不参与判定；其余规则不变，09:00:00 整也算迟到。'
-      : '只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。';
+    el.plainRules.classList.toggle('hidden', overtime);
+    el.otRules.classList.toggle('hidden', !overtime);
+
+    if (overtime) {
+      el.ruleBadge.textContent = '按加班卡规则';
+      el.otRuleInText.textContent = '签到不在 ' + rule.inStart + '–' + rule.inEnd;
+      el.otRuleOutText.textContent = '签退早于 ' + rule.outFrom;
+      el.ruleNote.textContent = '同一人同一天第一次出现算正常卡，第二次及以后算加班卡；加班签到、签退必须齐全，只有签退或两者都空都会单独标注。时间可在下方「加班卡规则」中调整。';
+    } else {
+      el.ruleBadge.textContent = morning ? '只看签到' : '满足任一即无效';
+      el.ruleOut.classList.toggle('is-off', morning);
+      el.ruleOutBadge.textContent = morning ? '不校验' : '无效';
+      el.ruleNote.textContent = morning
+        ? '早上九点后统计：签退时间此时通常都是空的，不参与判定；其余规则不变，09:00:00 整也算迟到。'
+        : '只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。';
+    }
+
+    el.otNote.textContent = '当前按 ' + rule.inStart + '–' + rule.inEnd + ' 签到、' + rule.outFrom +
+      ' 起签退判定，仅「加班打卡」场景生效。';
   }
 
   function setMode(mode) {
-    var next = mode === C.MODES.MORNING ? C.MODES.MORNING : C.MODES.FULL;
+    var next = mode === C.MODES.MORNING ? C.MODES.MORNING :
+      (mode === C.MODES.OVERTIME ? C.MODES.OVERTIME : C.MODES.FULL);
     if (next === state.mode) return;
     state.mode = next;
     renderModeControls();
@@ -2866,6 +3301,32 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     });
   }
 
+  /** 加班打卡场景下，表里没有任何加班卡 */
+  function renderNoOvertime() {
+    hideMapHint();
+    state.records = [];
+    state.stats = null;
+    el.resultSub.textContent = (state.sheet ? state.sheet.name + ' · ' : '') + '没有找到加班卡';
+    el.autoHint.classList.add('hidden');
+    el.modeNote.classList.add('hidden');
+    el.stats.classList.add('hidden');
+    el.reasonChips.classList.add('hidden');
+    hideTable();
+    el.filterTabs.classList.add('hidden');
+    el.exportHint.textContent = '没有可导出的加班异常记录';
+    el.exportName.textContent = exportTitle() + '.xlsx';
+    el.exportBtn.disabled = true;
+    el.copyBtn.disabled = true;
+    el.exportBtnText.textContent = '导出 Excel';
+
+    showEmptyState({
+      icon: ICONS.search,
+      tone: 'amber',
+      title: '没有找到加班卡',
+      text: '没有发现同一人同一天签到晚于 16:00 的记录。<br>加班卡通常表现为同一人同一日期出现两行，第二行在晚上签到。'
+    });
+  }
+
   function renderTimes(parsed, bad, ignoredBlank) {
     if (parsed.kind === 'blank') {
       if (ignoredBlank) {
@@ -2877,26 +3338,46 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     return '<span class="time-value' + (bad ? ' time-warning' : '') + '">' + esc(display) + '</span>';
   }
 
+  var OVERTIME_IN_CODES = ['ot-early-in', 'ot-late-in', 'ot-missing-in', 'ot-bad-in', 'ot-only-out', 'ot-blank'];
+  var OVERTIME_OUT_CODES = ['ot-early-out', 'ot-missing-out', 'ot-bad-out'];
+
+  function hasAnyReason(record, codes) {
+    return codes.some(function (code) {
+      return record.reasons.indexOf(code) !== -1;
+    });
+  }
+
   function renderTable(rows) {
     var shown = rows.slice(0, MAX_PREVIEW_ROWS);
     var morning = isMorning();
+    var overtime = isOvertime();
     var html = shown.map(function (record) {
-      var badIn = record.reasons.indexOf('late-in') !== -1 ||
-        record.reasons.indexOf('missing-in') !== -1 ||
-        record.reasons.indexOf('bad-in') !== -1;
-      var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
-        record.reasons.indexOf('bad-out') !== -1);
+      var badIn = overtime
+        ? hasAnyReason(record, OVERTIME_IN_CODES)
+        : (record.reasons.indexOf('late-in') !== -1 ||
+          record.reasons.indexOf('missing-in') !== -1 ||
+          record.reasons.indexOf('bad-in') !== -1);
+      var badOut = overtime
+        ? hasAnyReason(record, OVERTIME_OUT_CODES)
+        : (!morning && (record.reasons.indexOf('missing-out') !== -1 ||
+          record.reasons.indexOf('bad-out') !== -1));
 
       var nameHtml = record.name
         ? '<span>' + esc(record.name) + '</span>'
         : '<span class="name-empty">（空姓名）</span>';
 
+      var partial = overtime && record.reasons.indexOf('ot-only-out') !== -1;
+      var blankOt = overtime && record.reasons.indexOf('ot-blank') !== -1;
       var statusHtml = record.invalid
-        ? '<span class="badge badge-invalid">无效</span>' +
-          '<div class="status-reasons">' + esc(record.reasonLabels.join(' · ')) + '</div>'
-        : '<span class="badge badge-valid">有效</span>';
+        ? '<span class="badge badge-invalid">' + (overtime ? '异常' : '无效') + '</span>' +
+          (partial ? '<span class="badge badge-partial">仅签退</span>' : '') +
+          (blankOt ? '<span class="badge badge-missing">未打卡</span>' : '') +
+          '<div class="status-reasons' + (partial ? ' is-partial' : (blankOt ? ' is-missing' : '')) + '">' +
+          esc(record.reasonLabels.join(' · ')) + '</div>'
+        : '<span class="badge badge-valid">' + (overtime ? '正常' : '有效') + '</span>';
 
-      return '<tr class="' + (record.invalid ? 'is-invalid' : '') + '">' +
+      return '<tr class="' + (record.invalid ? 'is-invalid' : '') +
+        (partial ? ' is-partial-row' : '') + (blankOt ? ' is-missing-row' : '') + '">' +
         '<td class="cell-no">' + record.row + '</td>' +
         '<td class="cell-name">' + nameHtml + '</td>' +
         '<td class="cell-time' + (badIn ? ' cell-bad' : '') + '">' + renderTimes(record.signIn, badIn) + '</td>' +
@@ -2908,7 +3389,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     el.previewBody.innerHTML = html;
     var rightNote = rows.length > MAX_PREVIEW_ROWS
       ? '仅预览前 ' + MAX_PREVIEW_ROWS + ' 条，导出包含全部'
-      : (state.filter === 'invalid' ? '仅显示无效记录' : '异常单元格已标红');
+      : (state.filter === 'invalid' ? '仅显示' + (overtime ? '异常' : '无效') + '记录' : '异常单元格已标红');
     el.tableFoot.innerHTML =
       '<span>显示 <b>' + shown.length + '</b> / ' + rows.length + ' 条</span>' +
       '<span>' + rightNote + '</span>';
@@ -2918,6 +3399,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
   function renderFooter() {
     var morning = isMorning();
+    var overtime = isOvertime();
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
     el.exportName.textContent = exportTitle() + '.xlsx';
 
     var invalid = state.stats ? state.stats.invalid : 0;
@@ -2926,9 +3409,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     } else if (!state.stats) {
       el.exportHint.textContent = '完成列映射并读取数据后即可导出';
     } else if (!invalid) {
-      el.exportHint.textContent = morning ? '没有未签到或迟到的记录，无需导出' : '没有无效记录，无需导出';
+      el.exportHint.textContent = '没有' + invalidText + '记录，无需导出';
     } else {
-      el.exportHint.textContent = '将导出 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录 · 异常单元格标红';
+      el.exportHint.textContent = '将导出 ' + invalid + ' 条' + invalidText + '记录 · 异常单元格标红';
     }
 
     el.exportBtnText.textContent = invalid > 0 ? '导出 Excel（' + invalid + '）' : '导出 Excel';
@@ -2936,16 +3419,38 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     el.copyBtn.disabled = invalid === 0;
   }
 
-  /** 签退时间大面积为空时，提示可以切换到「早上九点后」 */
-  function renderSignOutHint(total, morning) {
+  /**
+   * 结果区提示条：
+   *   1. 普通场景发现被排除的加班卡时，引导切换到「加班打卡」；
+   *   2. 签退大面积为空时，引导切换到「早上九点后」。
+   */
+  function renderAutoHint(total, morning) {
+    var overtime = isOvertime();
+
+    if (!morning && !overtime && state.skippedOvertime > 0) {
+      state.autoHintAction = 'overtime';
+      el.autoHintTitle.textContent = '已排除 ' + state.skippedOvertime + ' 条加班卡';
+      el.autoHintText.textContent = '普通考勤只统计非加班记录；如需检查加班签到、签退是否合规，可切换到「加班打卡」。';
+      el.autoHintBtn.textContent = '检查加班卡';
+      el.autoHint.classList.remove('hidden');
+      return;
+    }
+
     var blankOut = 0;
     state.records.forEach(function (record) {
       if (record.signOut.kind === 'blank') blankOut += 1;
     });
     var ratio = total ? blankOut / total : 0;
-    var show = !morning && total > 0 && state.stats.counts['missing-out'] > 0 && ratio >= 0.6;
+    var missingOut = (state.stats.counts['missing-out'] || 0) > 0;
+    var show = !morning && !overtime && total > 0 && missingOut && ratio >= 0.6;
+
+    if (show) {
+      state.autoHintAction = 'morning';
+      el.autoHintTitle.textContent = '有 ' + Math.round(ratio * 100) + '% 的记录签退时间为空';
+      el.autoHintText.textContent = '如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。';
+      el.autoHintBtn.textContent = '只看签到';
+    }
     el.autoHint.classList.toggle('hidden', !show);
-    if (show) el.autoHintRatio.textContent = Math.round(ratio * 100) + '%';
   }
 
   function renderResults() {
@@ -2954,6 +3459,11 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var total = stats.total;
     var invalid = stats.invalid;
     var morning = isMorning();
+    var overtime = isOvertime();
+    var rule = overtimeRule();
+
+    el.thIn.textContent = overtime ? '加班签到' : '签到时间';
+    el.thOut.textContent = overtime ? '加班签退' : '签退时间';
 
     el.stats.classList.remove('hidden');
     el.filterTabs.classList.remove('hidden');
@@ -2962,37 +3472,51 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     el.statTotal.textContent = String(total);
     el.statInvalid.textContent = String(invalid);
     el.statValid.textContent = String(stats.valid);
-    el.statInvalidLabel.textContent = morning ? '未签到 / 迟到' : '无效记录';
+    el.statInvalidLabel.textContent = overtime ? '加班异常' : (morning ? '未签到 / 迟到' : '无效记录');
     el.statInvalidFoot.textContent = invalid
       ? '异常率 ' + ((invalid / total) * 100).toFixed(1).replace(/\.0$/, '') + '%'
       : '全部通过';
-    el.statValidFoot.textContent = morning
-      ? (invalid ? '9:00 前已完成签到' : '全部在 9:00 前签到')
-      : (invalid ? '签到与签退均正常' : '全部记录均正常');
+    el.statValidFoot.textContent = overtime
+      ? (invalid ? '签到与签退均在规定时间内' : '全部加班卡均正常')
+      : (morning
+        ? (invalid ? '9:00 前已完成签到' : '全部在 9:00 前签到')
+        : (invalid ? '签到与签退均正常' : '全部记录均正常'));
 
-    el.modeNote.classList.toggle('hidden', !morning);
-    renderSignOutHint(total, morning);
+    el.modeNote.classList.toggle('hidden', !(morning || overtime));
+    if (overtime) {
+      el.modeNoteTag.textContent = '加班打卡';
+      el.modeNoteText.textContent = '只统计同一人同一天第二次及以后的加班卡：' + rule.inStart + '–' + rule.inEnd +
+        ' 签到、' + rule.outFrom + ' 起签退才正常；仅签退或签到签退都空会单独标注；签退到次日凌晨视为正常。';
+    } else if (morning) {
+      el.modeNoteTag.textContent = '早上九点后';
+      el.modeNoteText.textContent = '签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。';
+    }
+    renderAutoHint(total, morning);
 
     if (invalid > 0) {
-      var definitions = ['late-in', 'missing-out', 'missing-in', 'bad-in', 'bad-out'];
+      var definitions = overtime
+        ? ['ot-blank', 'ot-only-out', 'ot-late-in', 'ot-early-in', 'ot-early-out', 'ot-missing-in', 'ot-missing-out', 'ot-bad-in', 'ot-bad-out']
+        : ['late-in', 'missing-out', 'missing-in', 'bad-in', 'bad-out'];
       var chips = definitions.filter(function (code) {
         return stats.counts[code] > 0;
       }).map(function (code) {
-        return '<span class="reason-chip"><span class="chip-dot"></span>' +
-          esc(C.REASONS[code]) + ' <b>' + stats.counts[code] + '</b></span>';
+        var special = code === 'ot-blank' ? ' is-missing' : (code === 'ot-only-out' ? ' is-partial' : '');
+        return '<span class="reason-chip' + special + '"><span class="chip-dot"></span>' +
+          esc(stats.labels[code] || C.REASONS[code] || code) + ' <b>' + stats.counts[code] + '</b></span>';
       }).join('');
       el.reasonChips.innerHTML = chips +
-        '<span class="chips-note">同一人可能同时命中多条规则</span>';
+        '<span class="chips-note">同一条记录可能同时命中多条规则</span>';
       el.reasonChips.classList.remove('hidden');
     } else {
       el.reasonChips.classList.add('hidden');
     }
 
     var sheetName = state.sheet ? state.sheet.name : '';
-    el.resultSub.textContent = sheetName + ' · 共 ' + total + ' 条记录' +
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
+    el.resultSub.textContent = sheetName + ' · ' + (overtime ? '共 ' + total + ' 条加班卡' : '共 ' + total + ' 条记录') +
       (invalid
-        ? ' · 发现 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效')
-        : ' · 全部有效');
+        ? ' · 发现 ' + invalid + ' 条' + invalidText
+        : ' · 全部' + (overtime ? '加班卡正常' : '有效'));
 
     var rows = state.filter === 'invalid'
       ? state.records.filter(function (record) { return record.invalid; })
@@ -3005,13 +3529,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       showEmptyState({
         icon: ICONS.success,
         tone: 'green',
-        title: morning ? '没有未签到或迟到的记录' : '本次没有发现无效记录',
-        text: morning
-          ? '所有记录都在 09:00:00 前完成了签到，签退时间不参与判定。'
-          : '所有记录均满足签到时间早于 09:00:00，且签退时间不为空白。',
+        title: overtime
+          ? '本次没有发现加班异常'
+          : (morning ? '没有未签到或迟到的记录' : '本次没有发现无效记录'),
+        text: overtime
+          ? '所有加班卡都在 ' + rule.inStart + '–' + rule.inEnd + ' 之间签到，且签退不早于 ' + rule.outFrom + '。'
+          : (morning
+            ? '所有记录都在 09:00:00 前完成了签到，签退时间不参与判定。'
+            : '所有记录均满足签到时间早于 09:00:00，且签退时间不为空白。'),
         steps:
           '<div class="empty-steps">' +
-          '<span class="empty-step"><i>✓</i>' + total + ' 条记录全部通过</span>' +
+          '<span class="empty-step"><i>✓</i>' + total + ' 条' + (overtime ? '加班卡' : '记录') + '全部通过</span>' +
           '</div>'
       });
     }
@@ -3045,7 +3573,8 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     state.stats = C.computeStats(records);
 
     if (!records.length) {
-      renderNoData();
+      if (isOvertime()) renderNoOvertime();
+      else renderNoData();
       return;
     }
     renderResults();
@@ -3097,6 +3626,40 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     debounceRecalc();
   }
 
+  /** 加班卡时间配置变更：校验后立即重算 */
+  function onOvertimeChange() {
+    var start = C.parseClockSeconds(el.otInStart.value);
+    var end = C.parseClockSeconds(el.otInEnd.value);
+    var outFrom = C.parseClockSeconds(el.otOutFrom.value);
+    var changed = false;
+
+    if (start == null || end == null) {
+      el.otInStart.value = '18:00';
+      el.otInEnd.value = '19:00';
+      showToast('加班签到时间无法识别，已恢复为 18:00–19:00。', 'error');
+      changed = true;
+    } else if (start >= end) {
+      el.otInStart.value = '18:00';
+      el.otInEnd.value = '19:00';
+      showToast('签到开始时间必须早于截止时间，已恢复为 18:00–19:00。', 'error');
+      changed = true;
+    }
+    if (outFrom == null) {
+      el.otOutFrom.value = '21:00';
+      showToast('最早签退时间无法识别，已恢复为 21:00。', 'error');
+      changed = true;
+    }
+
+    state.overtime = {
+      inStart: el.otInStart.value,
+      inEnd: el.otInEnd.value,
+      outFrom: el.otOutFrom.value
+    };
+    renderModeControls();
+    if (!changed && state.workbook) debounceRecalc();
+    else if (changed && state.workbook) recalc();
+  }
+
   function formatLoadError(err) {
     var message = String((err && err.message) || err || '');
     if (/password|encrypt/i.test(message)) {
@@ -3117,6 +3680,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     el.dataStartInput.disabled = !on;
     el.sheetSelect.disabled = !on || state.worksheets.length <= 1;
     el.remapBtn.disabled = !on;
+    el.otInStart.disabled = !on;
+    el.otInEnd.disabled = !on;
+    el.otOutFrom.disabled = !on;
     if (!on) {
       el.nameCol.disabled = true;
       el.inCol.disabled = true;
@@ -3166,6 +3732,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       state.stats = null;
       state.filter = 'all';
       state.mapping = { name: '', in: '', out: '' };
+      state.skippedOvertime = 0;
 
       el.fileName.textContent = name;
       el.fileName.title = name;
@@ -3226,6 +3793,17 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false };
   }
 
+  /** 缺加班签到用橙色、加班未打卡用红色底纹单独标注 */
+  function setReasonCell(cell, text, zebra, tone) {
+    setTextCell(cell, text, zebra);
+    if (!tone) return;
+    var colors = tone === 'missing'
+      ? { fill: 'FFFEF3F2', font: 'FFB42318' }
+      : { fill: 'FFFFFAEB', font: 'FFB54708' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.fill } };
+    cell.font = { name: '等线', size: 11, bold: true, color: { argb: colors.font } };
+  }
+
   function downloadBlob(blob, fileName) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
@@ -3250,6 +3828,9 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     var today = C.todayInfo();
     var title = exportTitle();
     var morning = isMorning();
+    var overtime = isOvertime();
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
+    var sheetName = overtime ? '加班卡异常人员' : (morning ? '未签到与迟到人员' : '打卡无效人员');
     var originalText = el.exportBtnText.textContent;
     el.exportBtn.disabled = true;
     el.exportBtnText.textContent = '正在生成…';
@@ -3259,7 +3840,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       workbook.creator = '打卡无效记录筛查';
       workbook.created = new Date();
 
-      var worksheet = workbook.addWorksheet(morning ? '未签到与迟到人员' : '打卡无效人员', {
+      var worksheet = workbook.addWorksheet(sheetName, {
         views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
         pageSetup: {
           paperSize: 9,
@@ -3277,7 +3858,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
 
       var titles = morning
         ? [title, '签到时间', '异常原因']
-        : [title, '签到时间', '签退时间', '异常原因'];
+        : [title, overtime ? '加班签到' : '签到时间', overtime ? '加班签退' : '签退时间', '异常原因'];
 
       var header = worksheet.getRow(1);
       header.height = 30;
@@ -3296,14 +3877,21 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       });
 
       invalidRecords.forEach(function (record, index) {
-        var badIn = record.reasons.indexOf('late-in') !== -1 ||
-          record.reasons.indexOf('missing-in') !== -1 ||
-          record.reasons.indexOf('bad-in') !== -1;
-        var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
-          record.reasons.indexOf('bad-out') !== -1);
+        var badIn = overtime
+          ? hasAnyReason(record, OVERTIME_IN_CODES)
+          : (record.reasons.indexOf('late-in') !== -1 ||
+            record.reasons.indexOf('missing-in') !== -1 ||
+            record.reasons.indexOf('bad-in') !== -1);
+        var badOut = overtime
+          ? hasAnyReason(record, OVERTIME_OUT_CODES)
+          : (!morning && (record.reasons.indexOf('missing-out') !== -1 ||
+            record.reasons.indexOf('bad-out') !== -1));
         var zebra = index % 2 === 1;
         var name = record.name || '';
         var reason = record.reasonLabels.join('、');
+        var tone = !overtime ? '' :
+          (record.reasons.indexOf('ot-blank') !== -1 ? 'missing' :
+            (record.reasons.indexOf('ot-only-out') !== -1 ? 'partial' : ''));
 
         var row = morning
           ? worksheet.addRow([name || null, null, reason])
@@ -3312,10 +3900,10 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         setTextCell(row.getCell(1), name, zebra);
         setTimeCell(row.getCell(2), record.signIn, badIn, zebra);
         if (morning) {
-          setTextCell(row.getCell(3), reason, zebra);
+          setReasonCell(row.getCell(3), reason, zebra, tone);
         } else {
           setTimeCell(row.getCell(3), record.signOut, badOut, zebra);
-          setTextCell(row.getCell(4), reason, zebra);
+          setReasonCell(row.getCell(4), reason, zebra, tone);
         }
       });
 
@@ -3327,7 +3915,7 @@ https://github.com/nodeca/pako/blob/main/LICENSE
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       downloadBlob(blob, title + '.xlsx');
-      showToast('已导出 ' + invalidRecords.length + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录');
+      showToast('已导出 ' + invalidRecords.length + ' 条' + invalidText + '记录');
     } catch (err) {
       console.error(err);
       showToast('导出失败：' + (err && err.message ? err.message : '未知错误'), 'error');
@@ -3450,11 +4038,14 @@ https://github.com/nodeca/pako/blob/main/LICENSE
     el.nameCol.addEventListener('change', onMappingChange);
     el.inCol.addEventListener('change', onMappingChange);
     el.outCol.addEventListener('change', onMappingChange);
+    el.otInStart.addEventListener('change', onOvertimeChange);
+    el.otInEnd.addEventListener('change', onOvertimeChange);
+    el.otOutFrom.addEventListener('change', onOvertimeChange);
 
     el.remapBtn.addEventListener('click', function () {
       if (!state.workbook) return;
       var complete = applyAutoMapping();
-      if (complete) showToast('已根据表头重新识别三列');
+      if (complete) showToast('已根据表头重新识别关键列');
       else showToast('未能完全识别，请手动选择缺失的列。', 'info');
     });
 
@@ -3475,14 +4066,23 @@ https://github.com/nodeca/pako/blob/main/LICENSE
       var mode = button.getAttribute('data-mode');
       if (!mode || mode === state.mode) return;
       setMode(mode);
-      showToast(isMorning()
-        ? '已切换到「早上九点后」：签退时间不参与判定'
-        : '已切换回「全天考勤」：签到、签退都要检查', 'info');
+      if (isOvertime()) {
+        showToast('已切换到「加班打卡」：只检查同一人同日期里晚上签到的那条记录', 'info');
+      } else if (isMorning()) {
+        showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      } else {
+        showToast('已切换回「全天考勤」：签到、签退都要检查', 'info');
+      }
     });
 
     el.autoHintBtn.addEventListener('click', function () {
-      setMode(C.MODES.MORNING);
-      showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      if (state.autoHintAction === 'overtime') {
+        setMode(C.MODES.OVERTIME);
+        showToast('已切换到「加班打卡」，按左侧加班规则检查', 'info');
+      } else {
+        setMode(C.MODES.MORNING);
+        showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      }
     });
 
     el.copyBtn.addEventListener('click', copyNames);

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <meta name="description" content="上传考勤 Excel，自动筛查 9:00 及以后签到（9:00 整也算迟到）、未签到或未签退的记录，并导出标红结果。">
+  <meta name="description" content="上传考勤 Excel，自动筛查 9:00 及以后签到（9:00 整也算迟到）、未签到或未签退的记录，以及加班卡签到、签退是否合规，并导出标红结果。">
   <title>打卡无效记录筛查</title>
   <style>
 /*__STYLE__*/
@@ -153,10 +153,37 @@
 
         <div class="rule-box">
           <div class="rule-title">判定规则 <span id="ruleBadge">满足任一即无效</span></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签到时间 ≥ 09:00:00</span><b>无效</b></div>
-          <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
-          <div class="rule-item" id="ruleOut"><span class="rule-dot"></span><span>签退时间为空白</span><b id="ruleOutBadge">无效</b></div>
+          <div id="plainRules">
+            <div class="rule-item"><span class="rule-dot"></span><span>签到时间 ≥ 09:00:00</span><b>无效</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span>签到时间为空白</span><b>无效</b></div>
+            <div class="rule-item" id="ruleOut"><span class="rule-dot"></span><span>签退时间为空白</span><b id="ruleOutBadge">无效</b></div>
+          </div>
+          <div id="otRules" class="hidden">
+            <div class="rule-item"><span class="rule-dot"></span><span id="otRuleInText">签到不在 18:00–19:00</span><b>异常</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span id="otRuleOutText">签退早于 21:00</span><b>异常</b></div>
+            <div class="rule-item"><span class="rule-dot"></span><span>签到或签退为空白</span><b>异常</b></div>
+          </div>
           <p id="ruleNote">只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。</p>
+        </div>
+
+        <div class="overtime-box">
+          <div class="rule-title overtime-title">加班卡规则 <span>加班打卡场景生效</span></div>
+          <div class="field-grid">
+            <label class="field">
+              <span>签到开始</span>
+              <input id="otInStart" type="time" step="60" value="18:00" disabled>
+            </label>
+            <label class="field">
+              <span>签到截止</span>
+              <input id="otInEnd" type="time" step="60" value="19:00" disabled>
+            </label>
+          </div>
+          <label class="field">
+            <span>最早签退</span>
+            <input id="otOutFrom" type="time" step="60" value="21:00" disabled>
+          </label>
+          <p id="otNote">当前按 18:00–19:00 签到、21:00 起签退判定，仅「加班打卡」场景生效。</p>
+          <p class="ot-detect">识别方式：同一人同一天第一次出现算正常卡，第二次及以后算加班卡；只有加班签退、或加班签到签退都为空，都会单独标注。</p>
         </div>
       </section>
     </aside>
@@ -174,6 +201,7 @@
           <div class="segmented" id="modeTabs" role="group" aria-label="统计场景">
             <button class="seg-btn is-active" type="button" data-mode="full" aria-pressed="true" title="签到、签退都检查">全天考勤</button>
             <button class="seg-btn" type="button" data-mode="morning" aria-pressed="false" title="早上九点后：只检查签到，签退为空不算异常">早上九点后</button>
+            <button class="seg-btn" type="button" data-mode="overtime" aria-pressed="false" title="加班打卡：18:00-19:00 签到，21:00 后签退（可配置）">加班打卡</button>
           </div>
           <div class="segmented" id="filterTabs">
             <button class="seg-btn is-active" type="button" data-filter="all">全部</button>
@@ -185,15 +213,15 @@
       <div class="result-body" id="resultBody">
         <div class="auto-hint hidden" id="autoHint">
           <div class="auto-hint-text">
-            <b>有 <span id="autoHintRatio">0%</span> 的记录签退时间为空</b>
-            <span>如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。</span>
+            <b id="autoHintTitle">有 0% 的记录签退时间为空</b>
+            <span id="autoHintText">如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。</span>
           </div>
           <button class="btn btn-hint" id="autoHintBtn" type="button">只看签到</button>
         </div>
 
         <div class="mode-note hidden" id="modeNote">
-          <span class="mode-note-tag">早上九点后</span>
-          <span>签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。</span>
+          <span class="mode-note-tag" id="modeNoteTag">早上九点后</span>
+          <span id="modeNoteText">签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。</span>
         </div>
 
         <div class="stats hidden" id="stats">
@@ -224,8 +252,8 @@
                 <tr>
                   <th class="col-no">行号</th>
                   <th>姓名</th>
-                  <th>签到时间</th>
-                  <th>签退时间</th>
+                  <th id="thIn">签到时间</th>
+                  <th id="thOut">签退时间</th>
                   <th class="col-status">判定</th>
                 </tr>
               </thead>

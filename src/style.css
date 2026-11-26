@@ -401,6 +401,7 @@ svg {
 }
 
 .field input[type="number"],
+.field input[type="time"],
 .field select,
 .sheet-select {
   width: 100%;
@@ -415,9 +416,12 @@ svg {
   transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
-.field input[type="number"] {
+.field input[type="number"],
+.field input[type="time"] {
   font-variant-numeric: tabular-nums;
 }
+
+
 
 .field input:focus,
 .field select:focus {
@@ -589,6 +593,46 @@ svg {
   font-size: 10px;
   line-height: 1.65;
   color: #9a6a63;
+}
+
+/* 加班卡规则配置 */
+.overtime-box {
+  margin-top: 12px;
+  padding: 13px 13px 12px;
+  border: 1px solid #d6e4ff;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fbfdff, #f3f8ff);
+}
+
+.overtime-box .rule-title {
+  color: #1741b6;
+}
+
+.overtime-box .rule-title > span {
+  background: #dbe7ff;
+  color: #1741b6;
+}
+
+.overtime-box .field {
+  margin-top: 9px;
+}
+
+.overtime-box .field > span {
+  color: #1d4ed8;
+}
+
+.overtime-box p {
+  margin: 9px 0 0;
+  font-size: 10px;
+  line-height: 1.65;
+  color: #5b77b5;
+}
+
+.overtime-box .ot-detect {
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed #dbe7ff;
+  color: #3f5f9e;
 }
 
 /* ============ 结果 ============ */
@@ -1046,6 +1090,78 @@ svg {
 .badge-valid {
   color: #067647;
   background: #dcfae6;
+}
+
+/* 缺加班签到（仅签退）：橙色单独标注 */
+.badge + .badge {
+  margin-left: 4px;
+}
+
+.badge-partial {
+  color: #b54708;
+  background: #fffaeb;
+  box-shadow: inset 0 0 0 1px #fedf89;
+}
+
+.status-reasons.is-partial {
+  color: #b54708;
+}
+
+.preview-table tbody tr.is-partial-row {
+  background: #fffdf6;
+}
+
+.preview-table tbody tr.is-partial-row:hover {
+  background: #fffaeb;
+}
+
+.preview-table tbody tr.is-partial-row td:first-child {
+  box-shadow: inset 3px 0 0 #f79009;
+}
+
+.reason-chip.is-partial {
+  border-color: #fedf89;
+  background: #fffaeb;
+}
+
+.reason-chip.is-partial b {
+  color: #b54708;
+}
+
+.reason-chip.is-partial .chip-dot {
+  background: #f79009;
+}
+
+/* 加班未打卡（签到、签退均为空）：红色单独标注 */
+.badge-missing {
+  color: var(--red-2);
+  background: #fee4e2;
+  box-shadow: inset 0 0 0 1px #fecdca;
+}
+
+.status-reasons.is-missing {
+  color: var(--red-2);
+}
+
+.preview-table tbody tr.is-missing-row {
+  background: #fffbfa;
+}
+
+.preview-table tbody tr.is-missing-row:hover {
+  background: #fff6f4;
+}
+
+.reason-chip.is-missing {
+  border-color: #fecdca;
+  background: #fef3f2;
+}
+
+.reason-chip.is-missing b {
+  color: var(--red-2);
+}
+
+.reason-chip.is-missing .chip-dot {
+  background: var(--red);
 }
 
 .status-reasons {

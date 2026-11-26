@@ -13,10 +13,19 @@
 
   var CUTOFF_SECONDS = 9 * 3600; // 09:00:00，到达该时刻即算迟到
   var EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30); // Excel 1900 日期系统
-  // 两种统计场景：
-  //   full    全天考勤——签到、签退都要检查
-  //   morning 早上九点后——签退时间通常还都是空的，只检查签到
-  var MODES = { FULL: 'full', MORNING: 'morning' };
+  // 加班卡默认规则：18:00-19:00 签到，21:00 起签退
+  var OVERTIME_DEFAULTS = {
+    inStartSeconds: 18 * 3600,
+    inEndSeconds: 19 * 3600,
+    outFromSeconds: 21 * 3600
+  };
+  // 加班卡兜底识别：有数据且签到晚于 16:00 的行视为加班卡
+  var OVERTIME_DETECT_SECONDS = 16 * 3600;
+  // 三种统计场景：
+  //   full     全天考勤——签到、签退都要检查
+  //   morning  早上九点后——签退时间通常还都是空的，只检查签到
+  //   overtime 加班打卡——只看加班卡，按加班签到/签退时间段判定
+  var MODES = { FULL: 'full', MORNING: 'morning', OVERTIME: 'overtime' };
   var PLACEHOLDERS = [
     '-', '--', '---', '—', '——', '–', '/', '\\', '无', '空', '未打卡',
     '未签退', '未签到', '待打卡', 'n/a', 'na', 'null', 'none'
@@ -253,8 +262,128 @@
     'bad-in': '签到时间无法识别',
     'late-in': '迟到（≥ 9:00）',
     'missing-out': '未签退',
-    'bad-out': '签退时间无法识别'
+    'bad-out': '签退时间无法识别',
+    'ot-missing-in': '未签到',
+    'ot-bad-in': '签到时间无法识别',
+    'ot-early-in': '签到早于规定时间',
+    'ot-late-in': '签到晚于规定时间',
+    'ot-missing-out': '未签退',
+    'ot-bad-out': '签退时间无法识别',
+    'ot-early-out': '签退早于规定时间',
+    'ot-only-out': '缺加班签到（仅签退）',
+    'ot-blank': '加班未打卡（签到、签退均为空）'
   };
+
+  /** 秒数格式化为 hh:mm，用于规则文案 */
+  function formatClock(seconds) {
+    if (typeof seconds !== 'number' || !isFinite(seconds)) return '';
+    var s = Math.round(seconds) % 86400;
+    return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60));
+  }
+
+  /** 解析界面上 hh:mm 形式的配置，无法识别时返回 null */
+  function parseClockSeconds(value) {
+    var parsed = parseTimeString(value);
+    return parsed.kind === 'time' ? parsed.seconds : null;
+  }
+
+  function pickSeconds(value, fallback) {
+    return typeof value === 'number' && isFinite(value) ? value : fallback;
+  }
+
+  /** 签退日期是否晚于签到日期（跨天加班） */
+  function isCrossDay(signIn, signOut) {
+    if (!signIn || !signOut) return false;
+    if (signIn.kind !== 'time' || signOut.kind !== 'time') return false;
+    if (!signIn.hasDate || !signOut.hasDate) return false;
+    var a = signIn.parts;
+    var b = signOut.parts;
+    if (!a || !b) return false;
+    if (b.y !== a.y) return b.y > a.y;
+    if (b.mo !== a.mo) return b.mo > a.mo;
+    return b.d > a.d;
+  }
+
+  function dateKeyOf(parsed) {
+    if (!parsed || parsed.kind !== 'time' || !parsed.hasDate || !parsed.parts) return '';
+    var p = parsed.parts;
+    return p.y + '-' + p.mo + '-' + p.d;
+  }
+
+  function recordDateKey(signIn, signOut) {
+    return dateKeyOf(signIn) || dateKeyOf(signOut);
+  }
+
+  function isOvertimeRow(item, outFrom) {
+    if (item.signIn.kind === 'time' && item.signIn.seconds >= OVERTIME_DETECT_SECONDS) return true;
+    // 只打了加班签退、没打加班签到
+    return item.signIn.kind === 'blank' &&
+      item.signOut.kind === 'time' &&
+      item.signOut.seconds >= outFrom;
+  }
+
+  /**
+   * 标记加班卡（考勤系统导出的「打卡类型」永远是传统打卡，只能靠行结构判断）：
+   *   1. 同一人同一日期出现第一次 = 正常卡，第二次及以后 = 加班卡；
+   *   2. 有数据的加班行：签到晚于 16:00，或签到空白但签退不早于最早签退时间；
+   *   3. 第二次出现但签到、签退都为空：加班卡未打卡，标为 blankOvertime；
+   *   4. 第一次出现就是空白、且后面还有正常卡时，视为导出填充行，跳过（skip）。
+   * 返回值与入参为同一数组，逐项带上 overtime / blankOvertime / skip 标记。
+   */
+  function classifyAttendanceRows(items, options) {
+    options = options || {};
+    var outFrom = pickSeconds(options.outFromSeconds, OVERTIME_DEFAULTS.outFromSeconds);
+    var groups = {};
+    var order = [];
+
+    items.forEach(function (item) {
+      item.overtime = false;
+      item.blankOvertime = false;
+      item.skip = false;
+      var name = trimText(item.name);
+      var dateKey = trimText(item.dateKey) || recordDateKey(item.signIn, item.signOut);
+      var key = name + '\u0000' + dateKey;
+      if (!groups[key]) {
+        groups[key] = [];
+        order.push(key);
+      }
+      groups[key].push(item);
+    });
+
+    order.forEach(function (key) {
+      var list = groups[key];
+      var hasData = list.map(function (item) {
+        return !(item.signIn.kind === 'blank' && item.signOut.kind === 'blank');
+      });
+
+      list.forEach(function (item, pos) {
+        if (hasData[pos]) {
+          item.overtime = isOvertimeRow(item, outFrom);
+          return;
+        }
+
+        // 第二次及以后出现，即使签到、签退都为空，也属于加班卡未打卡
+        if (pos > 0) {
+          item.overtime = true;
+          item.blankOvertime = true;
+          return;
+        }
+
+        // 第一次出现就是空白：后面还有正常卡时，这是导出填充行
+        var laterNormal = false;
+        for (var i = 1; i < list.length; i++) {
+          if (!hasData[i]) continue;
+          if (!isOvertimeRow(list[i], outFrom)) {
+            laterNormal = true;
+            break;
+          }
+        }
+        item.skip = laterNormal;
+      });
+    });
+
+    return items;
+  }
 
   /**
    * 按规则判定一条记录
@@ -297,18 +426,81 @@
     };
   }
 
+  /**
+   * 加班卡判定：签到需落在加班签到时间段内，签退不早于最早签退时间。
+   * options.inStartSeconds / inEndSeconds / outFromSeconds 均可配置。
+   */
+  function evaluateOvertimeRecord(signIn, signOut, options) {
+    options = options || {};
+    var inStart = pickSeconds(options.inStartSeconds, OVERTIME_DEFAULTS.inStartSeconds);
+    var inEnd = pickSeconds(options.inEndSeconds, OVERTIME_DEFAULTS.inEndSeconds);
+    var outFrom = pickSeconds(options.outFromSeconds, OVERTIME_DEFAULTS.outFromSeconds);
+
+    var reasons = [];
+    var labels = [];
+
+    function push(code, label) {
+      reasons.push(code);
+      labels.push(label || REASONS[code] || code);
+    }
+
+    // 加班段签到、签退都为空：整条加班卡未打卡
+    if (signIn.kind === 'blank' && signOut.kind === 'blank') {
+      push('ot-blank', '加班未打卡（签到、签退均为空）');
+      return {
+        invalid: true,
+        reasons: reasons,
+        reasonLabels: labels
+      };
+    }
+
+    if (signIn.kind === 'blank') {
+      if (signOut.kind === 'time') {
+        // 加班段必须「签到 + 签退」齐全，只有签退单独标注
+        push('ot-only-out', '缺加班签到（仅签退）');
+      } else {
+        push('ot-missing-in', '未签到');
+      }
+    } else if (signIn.kind === 'invalid') {
+      push('ot-bad-in', '签到时间无法识别');
+    } else if (signIn.seconds < inStart) {
+      push('ot-early-in', '签到早于 ' + formatClock(inStart));
+    } else if (signIn.seconds > inEnd) {
+      push('ot-late-in', '签到晚于 ' + formatClock(inEnd));
+    }
+
+    if (signOut.kind === 'blank') {
+      push('ot-missing-out', '未签退');
+    } else if (signOut.kind === 'invalid') {
+      push('ot-bad-out', '签退时间无法识别');
+    } else if (!isCrossDay(signIn, signOut) && signOut.seconds < outFrom) {
+      // 跨天签退（次日凌晨）视为正常
+      push('ot-early-out', '签退早于 ' + formatClock(outFrom));
+    }
+
+    return {
+      invalid: reasons.length > 0,
+      reasons: reasons,
+      reasonLabels: labels
+    };
+  }
+
   function computeStats(records) {
     var stats = {
       total: records.length,
       invalid: 0,
       valid: 0,
-      counts: { 'late-in': 0, 'missing-in': 0, 'bad-in': 0, 'missing-out': 0, 'bad-out': 0 }
+      counts: {},
+      labels: {}
     };
     records.forEach(function (record) {
       if (record.invalid) stats.invalid += 1;
       else stats.valid += 1;
-      record.reasons.forEach(function (code) {
-        if (stats.counts[code] != null) stats.counts[code] += 1;
+      record.reasons.forEach(function (code, index) {
+        stats.counts[code] = (stats.counts[code] || 0) + 1;
+        if (record.reasonLabels && record.reasonLabels[index]) {
+          stats.labels[code] = record.reasonLabels[index];
+        }
       });
     });
     return stats;
@@ -325,6 +517,12 @@
       if (s === '姓名') return 100;
       if (s.indexOf('姓名') !== -1) return 90;
       if (s === '名字' || s.indexOf('员工姓名') !== -1) return 80;
+      return 0;
+    }
+    if (field === 'date') {
+      if (s === '日期') return 100;
+      if (s === '考勤日期' || s === '打卡日期') return 95;
+      if (s.indexOf('日期') !== -1) return 80;
       return 0;
     }
     if (/地点|地址|位置|状态|类型|结果|日期/.test(s)) return 0;
@@ -347,9 +545,9 @@
 
   /** 根据表头自动识别三列，返回 1 基列号或 null */
   function autoMapHeaders(headers) {
-    var result = { name: null, in: null, out: null };
+    var result = { name: null, in: null, out: null, date: null };
     var used = {};
-    ['name', 'in', 'out'].forEach(function (field) {
+    ['name', 'in', 'out', 'date'].forEach(function (field) {
       var bestCol = null;
       var bestScore = 0;
       for (var i = 0; i < headers.length; i++) {
@@ -425,13 +623,20 @@
 
   return {
     CUTOFF_SECONDS: CUTOFF_SECONDS,
+    OVERTIME_DEFAULTS: OVERTIME_DEFAULTS,
+    OVERTIME_DETECT_SECONDS: OVERTIME_DETECT_SECONDS,
     MODES: MODES,
     REASONS: REASONS,
     normalizeCellValue: normalizeCellValue,
     parseTimeString: parseTimeString,
     parseTimeValue: parseTimeValue,
     parseSerial: parseSerial,
+    formatClock: formatClock,
+    parseClockSeconds: parseClockSeconds,
+    isCrossDay: isCrossDay,
     evaluateRecord: evaluateRecord,
+    evaluateOvertimeRecord: evaluateOvertimeRecord,
+    classifyAttendanceRows: classifyAttendanceRows,
     computeStats: computeStats,
     autoMapHeaders: autoMapHeaders,
     toExcelCell: toExcelCell,

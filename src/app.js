@@ -30,7 +30,10 @@
     records: [],
     stats: null,
     filter: 'all',
-    mode: 'full'
+    mode: 'full',
+    overtime: { inStart: '18:00', inEnd: '19:00', outFrom: '21:00' },
+    skippedOvertime: 0,
+    autoHintAction: ''
   };
 
   var ICONS = {
@@ -71,11 +74,12 @@
       'settingsCard', 'headerRowInput', 'dataStartInput', 'sheetSelect',
       'nameCol', 'inCol', 'outCol', 'nameSample', 'inSample', 'outSample',
       'remapBtn', 'mapHint', 'resultCard', 'resultSub', 'modeTabs', 'filterTabs',
-      'autoHint', 'autoHintRatio', 'autoHintBtn', 'modeNote',
+      'autoHint', 'autoHintTitle', 'autoHintText', 'autoHintBtn', 'modeNote', 'modeNoteTag', 'modeNoteText',
       'stats', 'statTotal', 'statInvalid', 'statValid', 'statInvalidLabel', 'statInvalidFoot', 'statValidFoot',
-      'reasonChips', 'tableShell', 'previewBody', 'tableFoot', 'emptyState',
+      'reasonChips', 'tableShell', 'previewBody', 'tableFoot', 'emptyState', 'thIn', 'thOut',
       'exportName', 'exportHint', 'copyBtn', 'exportBtn', 'exportBtnText',
-      'ruleBadge', 'ruleOut', 'ruleOutBadge', 'ruleNote',
+      'ruleBadge', 'plainRules', 'ruleOut', 'ruleOutBadge', 'ruleNote',
+      'otRules', 'otRuleInText', 'otRuleOutText', 'otInStart', 'otInEnd', 'otOutFrom', 'otNote',
       'loading', 'loadingFile', 'toast', 'todayText'
     ].forEach(function (id) {
       el[id] = $(id);
@@ -111,8 +115,35 @@
     return state.mode === C.MODES.MORNING;
   }
 
+  /** 当前是否为「加班打卡」场景 */
+  function isOvertime() {
+    return state.mode === C.MODES.OVERTIME;
+  }
+
+  function overtimeOptions() {
+    return {
+      inStartSeconds: C.parseClockSeconds(state.overtime.inStart),
+      inEndSeconds: C.parseClockSeconds(state.overtime.inEnd),
+      outFromSeconds: C.parseClockSeconds(state.overtime.outFrom)
+    };
+  }
+
+  /** 当前加班规则的可读文案（配置为空时回退到默认值） */
+  function overtimeRule() {
+    var defaults = C.OVERTIME_DEFAULTS;
+    var start = overtimeOptions().inStartSeconds;
+    var end = overtimeOptions().inEndSeconds;
+    var outFrom = overtimeOptions().outFromSeconds;
+    return {
+      inStart: C.formatClock(start == null ? defaults.inStartSeconds : start),
+      inEnd: C.formatClock(end == null ? defaults.inEndSeconds : end),
+      outFrom: C.formatClock(outFrom == null ? defaults.outFromSeconds : outFrom)
+    };
+  }
+
   function exportTitle() {
     var today = C.todayInfo();
+    if (isOvertime()) return today.monthDay + '加班打卡异常人员';
     return today.monthDay + '打卡' + (isMorning() ? '迟到与未打卡' : '无效') + '人员';
   }
 
@@ -300,17 +331,24 @@
     if (state.dataStart <= state.headerRow) return '数据起始行必须大于表头所在行。';
     if (!state.headers.length) return '当前工作表没有可读取的列，请检查表头行设置。';
 
-    var selected = [state.mapping.name, state.mapping.in, state.mapping.out];
-    if (selected[0] === selected[1] || selected[0] === selected[2] || selected[1] === selected[2]) {
-      return '姓名、签到时间、签退时间不能选择同一列。';
+    var columns = [state.mapping.name, state.mapping.in, state.mapping.out];
+    for (var i = 0; i < columns.length; i++) {
+      for (var j = i + 1; j < columns.length; j++) {
+        if (columns[i] && columns[i] === columns[j]) {
+          return '姓名、签到时间、签退时间不能选择同一列。';
+        }
+      }
     }
     return '';
   }
 
   function buildRecords() {
-    var records = [];
     var mapping = state.mapping;
     var lastRow = Math.min(state.rowCount, MAX_ROWS);
+    var overtimeMode = isOvertime();
+    var rows = [];
+    var auto = C.autoMapHeaders(state.headers.map(function (header) { return header.text; }));
+    var dateCol = auto.date;
 
     for (var r = state.dataStart; r <= lastRow; r++) {
       var nameCell = state.sheet.getCell(r, mapping.name);
@@ -323,17 +361,48 @@
 
       if (!name && signIn.kind === 'blank' && signOut.kind === 'blank') continue;
 
-      var evaluation = C.evaluateRecord(signIn, signOut, { mode: state.mode });
-      records.push({
+      rows.push({
         row: r,
         name: name,
+        dateKey: dateCol ? readCellText(state.sheet.getCell(r, dateCol)) : '',
         signIn: signIn,
-        signOut: signOut,
+        signOut: signOut
+      });
+    }
+
+    // 打卡类型列不可信：同人同日期多行时，按签到时间区分正常卡与加班卡
+    C.classifyAttendanceRows(rows, overtimeOptions());
+
+    var records = [];
+    var skippedOvertime = 0;
+
+    rows.forEach(function (item) {
+      if (item.skip) return;
+
+      if (overtimeMode) {
+        if (!item.overtime) return;
+      } else if (item.overtime) {
+        skippedOvertime += 1;
+        return;
+      }
+
+      var evaluation = overtimeMode
+        ? C.evaluateOvertimeRecord(item.signIn, item.signOut, overtimeOptions())
+        : C.evaluateRecord(item.signIn, item.signOut, { mode: state.mode });
+
+      records.push({
+        row: item.row,
+        name: item.name,
+        overtime: item.overtime,
+        signIn: item.signIn,
+        signOut: item.signOut,
         invalid: evaluation.invalid,
         reasons: evaluation.reasons,
         reasonLabels: evaluation.reasonLabels
       });
-    }
+    });
+
+    state.skippedOvertime = skippedOvertime;
     return records;
   }
 
@@ -407,22 +476,39 @@
   /** 同步「统计场景」按钮与左侧判定规则说明 */
   function renderModeControls() {
     var morning = isMorning();
+    var overtime = isOvertime();
+    var rule = overtimeRule();
+
     Array.prototype.forEach.call(el.modeTabs.querySelectorAll('.seg-btn'), function (btn) {
       var active = btn.getAttribute('data-mode') === state.mode;
       btn.classList.toggle('is-active', active);
       btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
 
-    el.ruleBadge.textContent = morning ? '只看签到' : '满足任一即无效';
-    el.ruleOut.classList.toggle('is-off', morning);
-    el.ruleOutBadge.textContent = morning ? '不校验' : '无效';
-    el.ruleNote.textContent = morning
-      ? '早上九点后统计：签退时间此时通常都是空的，不参与判定；其余规则不变，09:00:00 整也算迟到。'
-      : '只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。';
+    el.plainRules.classList.toggle('hidden', overtime);
+    el.otRules.classList.toggle('hidden', !overtime);
+
+    if (overtime) {
+      el.ruleBadge.textContent = '按加班卡规则';
+      el.otRuleInText.textContent = '签到不在 ' + rule.inStart + '–' + rule.inEnd;
+      el.otRuleOutText.textContent = '签退早于 ' + rule.outFrom;
+      el.ruleNote.textContent = '同一人同一天第一次出现算正常卡，第二次及以后算加班卡；加班签到、签退必须齐全，只有签退或两者都空都会单独标注。时间可在下方「加班卡规则」中调整。';
+    } else {
+      el.ruleBadge.textContent = morning ? '只看签到' : '满足任一即无效';
+      el.ruleOut.classList.toggle('is-off', morning);
+      el.ruleOutBadge.textContent = morning ? '不校验' : '无效';
+      el.ruleNote.textContent = morning
+        ? '早上九点后统计：签退时间此时通常都是空的，不参与判定；其余规则不变，09:00:00 整也算迟到。'
+        : '只比较时:分:秒，忽略日期；09:00:00 整也算迟到。签退列中的 “- / — / 无 / 未打卡” 等按空白处理。';
+    }
+
+    el.otNote.textContent = '当前按 ' + rule.inStart + '–' + rule.inEnd + ' 签到、' + rule.outFrom +
+      ' 起签退判定，仅「加班打卡」场景生效。';
   }
 
   function setMode(mode) {
-    var next = mode === C.MODES.MORNING ? C.MODES.MORNING : C.MODES.FULL;
+    var next = mode === C.MODES.MORNING ? C.MODES.MORNING :
+      (mode === C.MODES.OVERTIME ? C.MODES.OVERTIME : C.MODES.FULL);
     if (next === state.mode) return;
     state.mode = next;
     renderModeControls();
@@ -532,6 +618,32 @@
     });
   }
 
+  /** 加班打卡场景下，表里没有任何加班卡 */
+  function renderNoOvertime() {
+    hideMapHint();
+    state.records = [];
+    state.stats = null;
+    el.resultSub.textContent = (state.sheet ? state.sheet.name + ' · ' : '') + '没有找到加班卡';
+    el.autoHint.classList.add('hidden');
+    el.modeNote.classList.add('hidden');
+    el.stats.classList.add('hidden');
+    el.reasonChips.classList.add('hidden');
+    hideTable();
+    el.filterTabs.classList.add('hidden');
+    el.exportHint.textContent = '没有可导出的加班异常记录';
+    el.exportName.textContent = exportTitle() + '.xlsx';
+    el.exportBtn.disabled = true;
+    el.copyBtn.disabled = true;
+    el.exportBtnText.textContent = '导出 Excel';
+
+    showEmptyState({
+      icon: ICONS.search,
+      tone: 'amber',
+      title: '没有找到加班卡',
+      text: '没有发现同一人同一天签到晚于 16:00 的记录。<br>加班卡通常表现为同一人同一日期出现两行，第二行在晚上签到。'
+    });
+  }
+
   function renderTimes(parsed, bad, ignoredBlank) {
     if (parsed.kind === 'blank') {
       if (ignoredBlank) {
@@ -543,26 +655,46 @@
     return '<span class="time-value' + (bad ? ' time-warning' : '') + '">' + esc(display) + '</span>';
   }
 
+  var OVERTIME_IN_CODES = ['ot-early-in', 'ot-late-in', 'ot-missing-in', 'ot-bad-in', 'ot-only-out', 'ot-blank'];
+  var OVERTIME_OUT_CODES = ['ot-early-out', 'ot-missing-out', 'ot-bad-out'];
+
+  function hasAnyReason(record, codes) {
+    return codes.some(function (code) {
+      return record.reasons.indexOf(code) !== -1;
+    });
+  }
+
   function renderTable(rows) {
     var shown = rows.slice(0, MAX_PREVIEW_ROWS);
     var morning = isMorning();
+    var overtime = isOvertime();
     var html = shown.map(function (record) {
-      var badIn = record.reasons.indexOf('late-in') !== -1 ||
-        record.reasons.indexOf('missing-in') !== -1 ||
-        record.reasons.indexOf('bad-in') !== -1;
-      var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
-        record.reasons.indexOf('bad-out') !== -1);
+      var badIn = overtime
+        ? hasAnyReason(record, OVERTIME_IN_CODES)
+        : (record.reasons.indexOf('late-in') !== -1 ||
+          record.reasons.indexOf('missing-in') !== -1 ||
+          record.reasons.indexOf('bad-in') !== -1);
+      var badOut = overtime
+        ? hasAnyReason(record, OVERTIME_OUT_CODES)
+        : (!morning && (record.reasons.indexOf('missing-out') !== -1 ||
+          record.reasons.indexOf('bad-out') !== -1));
 
       var nameHtml = record.name
         ? '<span>' + esc(record.name) + '</span>'
         : '<span class="name-empty">（空姓名）</span>';
 
+      var partial = overtime && record.reasons.indexOf('ot-only-out') !== -1;
+      var blankOt = overtime && record.reasons.indexOf('ot-blank') !== -1;
       var statusHtml = record.invalid
-        ? '<span class="badge badge-invalid">无效</span>' +
-          '<div class="status-reasons">' + esc(record.reasonLabels.join(' · ')) + '</div>'
-        : '<span class="badge badge-valid">有效</span>';
+        ? '<span class="badge badge-invalid">' + (overtime ? '异常' : '无效') + '</span>' +
+          (partial ? '<span class="badge badge-partial">仅签退</span>' : '') +
+          (blankOt ? '<span class="badge badge-missing">未打卡</span>' : '') +
+          '<div class="status-reasons' + (partial ? ' is-partial' : (blankOt ? ' is-missing' : '')) + '">' +
+          esc(record.reasonLabels.join(' · ')) + '</div>'
+        : '<span class="badge badge-valid">' + (overtime ? '正常' : '有效') + '</span>';
 
-      return '<tr class="' + (record.invalid ? 'is-invalid' : '') + '">' +
+      return '<tr class="' + (record.invalid ? 'is-invalid' : '') +
+        (partial ? ' is-partial-row' : '') + (blankOt ? ' is-missing-row' : '') + '">' +
         '<td class="cell-no">' + record.row + '</td>' +
         '<td class="cell-name">' + nameHtml + '</td>' +
         '<td class="cell-time' + (badIn ? ' cell-bad' : '') + '">' + renderTimes(record.signIn, badIn) + '</td>' +
@@ -574,7 +706,7 @@
     el.previewBody.innerHTML = html;
     var rightNote = rows.length > MAX_PREVIEW_ROWS
       ? '仅预览前 ' + MAX_PREVIEW_ROWS + ' 条，导出包含全部'
-      : (state.filter === 'invalid' ? '仅显示无效记录' : '异常单元格已标红');
+      : (state.filter === 'invalid' ? '仅显示' + (overtime ? '异常' : '无效') + '记录' : '异常单元格已标红');
     el.tableFoot.innerHTML =
       '<span>显示 <b>' + shown.length + '</b> / ' + rows.length + ' 条</span>' +
       '<span>' + rightNote + '</span>';
@@ -584,6 +716,8 @@
 
   function renderFooter() {
     var morning = isMorning();
+    var overtime = isOvertime();
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
     el.exportName.textContent = exportTitle() + '.xlsx';
 
     var invalid = state.stats ? state.stats.invalid : 0;
@@ -592,9 +726,9 @@
     } else if (!state.stats) {
       el.exportHint.textContent = '完成列映射并读取数据后即可导出';
     } else if (!invalid) {
-      el.exportHint.textContent = morning ? '没有未签到或迟到的记录，无需导出' : '没有无效记录，无需导出';
+      el.exportHint.textContent = '没有' + invalidText + '记录，无需导出';
     } else {
-      el.exportHint.textContent = '将导出 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录 · 异常单元格标红';
+      el.exportHint.textContent = '将导出 ' + invalid + ' 条' + invalidText + '记录 · 异常单元格标红';
     }
 
     el.exportBtnText.textContent = invalid > 0 ? '导出 Excel（' + invalid + '）' : '导出 Excel';
@@ -602,16 +736,38 @@
     el.copyBtn.disabled = invalid === 0;
   }
 
-  /** 签退时间大面积为空时，提示可以切换到「早上九点后」 */
-  function renderSignOutHint(total, morning) {
+  /**
+   * 结果区提示条：
+   *   1. 普通场景发现被排除的加班卡时，引导切换到「加班打卡」；
+   *   2. 签退大面积为空时，引导切换到「早上九点后」。
+   */
+  function renderAutoHint(total, morning) {
+    var overtime = isOvertime();
+
+    if (!morning && !overtime && state.skippedOvertime > 0) {
+      state.autoHintAction = 'overtime';
+      el.autoHintTitle.textContent = '已排除 ' + state.skippedOvertime + ' 条加班卡';
+      el.autoHintText.textContent = '普通考勤只统计非加班记录；如需检查加班签到、签退是否合规，可切换到「加班打卡」。';
+      el.autoHintBtn.textContent = '检查加班卡';
+      el.autoHint.classList.remove('hidden');
+      return;
+    }
+
     var blankOut = 0;
     state.records.forEach(function (record) {
       if (record.signOut.kind === 'blank') blankOut += 1;
     });
     var ratio = total ? blankOut / total : 0;
-    var show = !morning && total > 0 && state.stats.counts['missing-out'] > 0 && ratio >= 0.6;
+    var missingOut = (state.stats.counts['missing-out'] || 0) > 0;
+    var show = !morning && !overtime && total > 0 && missingOut && ratio >= 0.6;
+
+    if (show) {
+      state.autoHintAction = 'morning';
+      el.autoHintTitle.textContent = '有 ' + Math.round(ratio * 100) + '% 的记录签退时间为空';
+      el.autoHintText.textContent = '如果你是在早上 9 点后统计，可切换到「早上九点后」，此时不检查签退时间。';
+      el.autoHintBtn.textContent = '只看签到';
+    }
     el.autoHint.classList.toggle('hidden', !show);
-    if (show) el.autoHintRatio.textContent = Math.round(ratio * 100) + '%';
   }
 
   function renderResults() {
@@ -620,6 +776,11 @@
     var total = stats.total;
     var invalid = stats.invalid;
     var morning = isMorning();
+    var overtime = isOvertime();
+    var rule = overtimeRule();
+
+    el.thIn.textContent = overtime ? '加班签到' : '签到时间';
+    el.thOut.textContent = overtime ? '加班签退' : '签退时间';
 
     el.stats.classList.remove('hidden');
     el.filterTabs.classList.remove('hidden');
@@ -628,37 +789,51 @@
     el.statTotal.textContent = String(total);
     el.statInvalid.textContent = String(invalid);
     el.statValid.textContent = String(stats.valid);
-    el.statInvalidLabel.textContent = morning ? '未签到 / 迟到' : '无效记录';
+    el.statInvalidLabel.textContent = overtime ? '加班异常' : (morning ? '未签到 / 迟到' : '无效记录');
     el.statInvalidFoot.textContent = invalid
       ? '异常率 ' + ((invalid / total) * 100).toFixed(1).replace(/\.0$/, '') + '%'
       : '全部通过';
-    el.statValidFoot.textContent = morning
-      ? (invalid ? '9:00 前已完成签到' : '全部在 9:00 前签到')
-      : (invalid ? '签到与签退均正常' : '全部记录均正常');
+    el.statValidFoot.textContent = overtime
+      ? (invalid ? '签到与签退均在规定时间内' : '全部加班卡均正常')
+      : (morning
+        ? (invalid ? '9:00 前已完成签到' : '全部在 9:00 前签到')
+        : (invalid ? '签到与签退均正常' : '全部记录均正常'));
 
-    el.modeNote.classList.toggle('hidden', !morning);
-    renderSignOutHint(total, morning);
+    el.modeNote.classList.toggle('hidden', !(morning || overtime));
+    if (overtime) {
+      el.modeNoteTag.textContent = '加班打卡';
+      el.modeNoteText.textContent = '只统计同一人同一天第二次及以后的加班卡：' + rule.inStart + '–' + rule.inEnd +
+        ' 签到、' + rule.outFrom + ' 起签退才正常；仅签退或签到签退都空会单独标注；签退到次日凌晨视为正常。';
+    } else if (morning) {
+      el.modeNoteTag.textContent = '早上九点后';
+      el.modeNoteText.textContent = '签退时间此时通常都是空的，已不参与判定；只统计「未签到」与「9:00 及以后签到」。';
+    }
+    renderAutoHint(total, morning);
 
     if (invalid > 0) {
-      var definitions = ['late-in', 'missing-out', 'missing-in', 'bad-in', 'bad-out'];
+      var definitions = overtime
+        ? ['ot-blank', 'ot-only-out', 'ot-late-in', 'ot-early-in', 'ot-early-out', 'ot-missing-in', 'ot-missing-out', 'ot-bad-in', 'ot-bad-out']
+        : ['late-in', 'missing-out', 'missing-in', 'bad-in', 'bad-out'];
       var chips = definitions.filter(function (code) {
         return stats.counts[code] > 0;
       }).map(function (code) {
-        return '<span class="reason-chip"><span class="chip-dot"></span>' +
-          esc(C.REASONS[code]) + ' <b>' + stats.counts[code] + '</b></span>';
+        var special = code === 'ot-blank' ? ' is-missing' : (code === 'ot-only-out' ? ' is-partial' : '');
+        return '<span class="reason-chip' + special + '"><span class="chip-dot"></span>' +
+          esc(stats.labels[code] || C.REASONS[code] || code) + ' <b>' + stats.counts[code] + '</b></span>';
       }).join('');
       el.reasonChips.innerHTML = chips +
-        '<span class="chips-note">同一人可能同时命中多条规则</span>';
+        '<span class="chips-note">同一条记录可能同时命中多条规则</span>';
       el.reasonChips.classList.remove('hidden');
     } else {
       el.reasonChips.classList.add('hidden');
     }
 
     var sheetName = state.sheet ? state.sheet.name : '';
-    el.resultSub.textContent = sheetName + ' · 共 ' + total + ' 条记录' +
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
+    el.resultSub.textContent = sheetName + ' · ' + (overtime ? '共 ' + total + ' 条加班卡' : '共 ' + total + ' 条记录') +
       (invalid
-        ? ' · 发现 ' + invalid + ' 条' + (morning ? '未签到或迟到' : '无效')
-        : ' · 全部有效');
+        ? ' · 发现 ' + invalid + ' 条' + invalidText
+        : ' · 全部' + (overtime ? '加班卡正常' : '有效'));
 
     var rows = state.filter === 'invalid'
       ? state.records.filter(function (record) { return record.invalid; })
@@ -671,13 +846,17 @@
       showEmptyState({
         icon: ICONS.success,
         tone: 'green',
-        title: morning ? '没有未签到或迟到的记录' : '本次没有发现无效记录',
-        text: morning
-          ? '所有记录都在 09:00:00 前完成了签到，签退时间不参与判定。'
-          : '所有记录均满足签到时间早于 09:00:00，且签退时间不为空白。',
+        title: overtime
+          ? '本次没有发现加班异常'
+          : (morning ? '没有未签到或迟到的记录' : '本次没有发现无效记录'),
+        text: overtime
+          ? '所有加班卡都在 ' + rule.inStart + '–' + rule.inEnd + ' 之间签到，且签退不早于 ' + rule.outFrom + '。'
+          : (morning
+            ? '所有记录都在 09:00:00 前完成了签到，签退时间不参与判定。'
+            : '所有记录均满足签到时间早于 09:00:00，且签退时间不为空白。'),
         steps:
           '<div class="empty-steps">' +
-          '<span class="empty-step"><i>✓</i>' + total + ' 条记录全部通过</span>' +
+          '<span class="empty-step"><i>✓</i>' + total + ' 条' + (overtime ? '加班卡' : '记录') + '全部通过</span>' +
           '</div>'
       });
     }
@@ -711,7 +890,8 @@
     state.stats = C.computeStats(records);
 
     if (!records.length) {
-      renderNoData();
+      if (isOvertime()) renderNoOvertime();
+      else renderNoData();
       return;
     }
     renderResults();
@@ -763,6 +943,40 @@
     debounceRecalc();
   }
 
+  /** 加班卡时间配置变更：校验后立即重算 */
+  function onOvertimeChange() {
+    var start = C.parseClockSeconds(el.otInStart.value);
+    var end = C.parseClockSeconds(el.otInEnd.value);
+    var outFrom = C.parseClockSeconds(el.otOutFrom.value);
+    var changed = false;
+
+    if (start == null || end == null) {
+      el.otInStart.value = '18:00';
+      el.otInEnd.value = '19:00';
+      showToast('加班签到时间无法识别，已恢复为 18:00–19:00。', 'error');
+      changed = true;
+    } else if (start >= end) {
+      el.otInStart.value = '18:00';
+      el.otInEnd.value = '19:00';
+      showToast('签到开始时间必须早于截止时间，已恢复为 18:00–19:00。', 'error');
+      changed = true;
+    }
+    if (outFrom == null) {
+      el.otOutFrom.value = '21:00';
+      showToast('最早签退时间无法识别，已恢复为 21:00。', 'error');
+      changed = true;
+    }
+
+    state.overtime = {
+      inStart: el.otInStart.value,
+      inEnd: el.otInEnd.value,
+      outFrom: el.otOutFrom.value
+    };
+    renderModeControls();
+    if (!changed && state.workbook) debounceRecalc();
+    else if (changed && state.workbook) recalc();
+  }
+
   function formatLoadError(err) {
     var message = String((err && err.message) || err || '');
     if (/password|encrypt/i.test(message)) {
@@ -783,6 +997,9 @@
     el.dataStartInput.disabled = !on;
     el.sheetSelect.disabled = !on || state.worksheets.length <= 1;
     el.remapBtn.disabled = !on;
+    el.otInStart.disabled = !on;
+    el.otInEnd.disabled = !on;
+    el.otOutFrom.disabled = !on;
     if (!on) {
       el.nameCol.disabled = true;
       el.inCol.disabled = true;
@@ -832,6 +1049,7 @@
       state.stats = null;
       state.filter = 'all';
       state.mapping = { name: '', in: '', out: '' };
+      state.skippedOvertime = 0;
 
       el.fileName.textContent = name;
       el.fileName.title = name;
@@ -892,6 +1110,17 @@
     cell.alignment = { vertical: 'middle', horizontal: 'left', wrapText: false };
   }
 
+  /** 缺加班签到用橙色、加班未打卡用红色底纹单独标注 */
+  function setReasonCell(cell, text, zebra, tone) {
+    setTextCell(cell, text, zebra);
+    if (!tone) return;
+    var colors = tone === 'missing'
+      ? { fill: 'FFFEF3F2', font: 'FFB42318' }
+      : { fill: 'FFFFFAEB', font: 'FFB54708' };
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: colors.fill } };
+    cell.font = { name: '等线', size: 11, bold: true, color: { argb: colors.font } };
+  }
+
   function downloadBlob(blob, fileName) {
     var url = URL.createObjectURL(blob);
     var link = document.createElement('a');
@@ -916,6 +1145,9 @@
     var today = C.todayInfo();
     var title = exportTitle();
     var morning = isMorning();
+    var overtime = isOvertime();
+    var invalidText = overtime ? '加班异常' : (morning ? '未签到或迟到' : '无效');
+    var sheetName = overtime ? '加班卡异常人员' : (morning ? '未签到与迟到人员' : '打卡无效人员');
     var originalText = el.exportBtnText.textContent;
     el.exportBtn.disabled = true;
     el.exportBtnText.textContent = '正在生成…';
@@ -925,7 +1157,7 @@
       workbook.creator = '打卡无效记录筛查';
       workbook.created = new Date();
 
-      var worksheet = workbook.addWorksheet(morning ? '未签到与迟到人员' : '打卡无效人员', {
+      var worksheet = workbook.addWorksheet(sheetName, {
         views: [{ state: 'frozen', ySplit: 1, showGridLines: false }],
         pageSetup: {
           paperSize: 9,
@@ -943,7 +1175,7 @@
 
       var titles = morning
         ? [title, '签到时间', '异常原因']
-        : [title, '签到时间', '签退时间', '异常原因'];
+        : [title, overtime ? '加班签到' : '签到时间', overtime ? '加班签退' : '签退时间', '异常原因'];
 
       var header = worksheet.getRow(1);
       header.height = 30;
@@ -962,14 +1194,21 @@
       });
 
       invalidRecords.forEach(function (record, index) {
-        var badIn = record.reasons.indexOf('late-in') !== -1 ||
-          record.reasons.indexOf('missing-in') !== -1 ||
-          record.reasons.indexOf('bad-in') !== -1;
-        var badOut = !morning && (record.reasons.indexOf('missing-out') !== -1 ||
-          record.reasons.indexOf('bad-out') !== -1);
+        var badIn = overtime
+          ? hasAnyReason(record, OVERTIME_IN_CODES)
+          : (record.reasons.indexOf('late-in') !== -1 ||
+            record.reasons.indexOf('missing-in') !== -1 ||
+            record.reasons.indexOf('bad-in') !== -1);
+        var badOut = overtime
+          ? hasAnyReason(record, OVERTIME_OUT_CODES)
+          : (!morning && (record.reasons.indexOf('missing-out') !== -1 ||
+            record.reasons.indexOf('bad-out') !== -1));
         var zebra = index % 2 === 1;
         var name = record.name || '';
         var reason = record.reasonLabels.join('、');
+        var tone = !overtime ? '' :
+          (record.reasons.indexOf('ot-blank') !== -1 ? 'missing' :
+            (record.reasons.indexOf('ot-only-out') !== -1 ? 'partial' : ''));
 
         var row = morning
           ? worksheet.addRow([name || null, null, reason])
@@ -978,10 +1217,10 @@
         setTextCell(row.getCell(1), name, zebra);
         setTimeCell(row.getCell(2), record.signIn, badIn, zebra);
         if (morning) {
-          setTextCell(row.getCell(3), reason, zebra);
+          setReasonCell(row.getCell(3), reason, zebra, tone);
         } else {
           setTimeCell(row.getCell(3), record.signOut, badOut, zebra);
-          setTextCell(row.getCell(4), reason, zebra);
+          setReasonCell(row.getCell(4), reason, zebra, tone);
         }
       });
 
@@ -993,7 +1232,7 @@
         type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       });
       downloadBlob(blob, title + '.xlsx');
-      showToast('已导出 ' + invalidRecords.length + ' 条' + (morning ? '未签到或迟到' : '无效') + '记录');
+      showToast('已导出 ' + invalidRecords.length + ' 条' + invalidText + '记录');
     } catch (err) {
       console.error(err);
       showToast('导出失败：' + (err && err.message ? err.message : '未知错误'), 'error');
@@ -1116,11 +1355,14 @@
     el.nameCol.addEventListener('change', onMappingChange);
     el.inCol.addEventListener('change', onMappingChange);
     el.outCol.addEventListener('change', onMappingChange);
+    el.otInStart.addEventListener('change', onOvertimeChange);
+    el.otInEnd.addEventListener('change', onOvertimeChange);
+    el.otOutFrom.addEventListener('change', onOvertimeChange);
 
     el.remapBtn.addEventListener('click', function () {
       if (!state.workbook) return;
       var complete = applyAutoMapping();
-      if (complete) showToast('已根据表头重新识别三列');
+      if (complete) showToast('已根据表头重新识别关键列');
       else showToast('未能完全识别，请手动选择缺失的列。', 'info');
     });
 
@@ -1141,14 +1383,23 @@
       var mode = button.getAttribute('data-mode');
       if (!mode || mode === state.mode) return;
       setMode(mode);
-      showToast(isMorning()
-        ? '已切换到「早上九点后」：签退时间不参与判定'
-        : '已切换回「全天考勤」：签到、签退都要检查', 'info');
+      if (isOvertime()) {
+        showToast('已切换到「加班打卡」：只检查同一人同日期里晚上签到的那条记录', 'info');
+      } else if (isMorning()) {
+        showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      } else {
+        showToast('已切换回「全天考勤」：签到、签退都要检查', 'info');
+      }
     });
 
     el.autoHintBtn.addEventListener('click', function () {
-      setMode(C.MODES.MORNING);
-      showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      if (state.autoHintAction === 'overtime') {
+        setMode(C.MODES.OVERTIME);
+        showToast('已切换到「加班打卡」，按左侧加班规则检查', 'info');
+      } else {
+        setMode(C.MODES.MORNING);
+        showToast('已切换到「早上九点后」：签退时间不参与判定', 'info');
+      }
     });
 
     el.copyBtn.addEventListener('click', copyNames);
